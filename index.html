@@ -632,12 +632,14 @@ async function add(){
 }
 
 function exportCsv(){
-  const head=['date','type','category','description','amount','paid_by','your_share','person','household'];
+  const head=['date','type','category','description','amount','paid_from','cashback','direction','paid_by','your_share','person','household'];
   const rows=S.txns.map(t=>{
     const person = (Array.isArray(t.splits)&&t.splits.length)
       ? t.splits.map(s=>s.name+': '+(Math.round(s.share*100)/100)).join(' | ')
       : (t.cpName||'');
-    return [t.date,t.type,t.category||'',(t.desc||'').replace(/,/g,';'),t.amount,t.paidBy||'',t.yourShare||0,person.replace(/,/g,';'),t.household?'Y':''];
+    const paidFrom = t.type==='expense' ? (t.paidBy==='other'?'':srcOf(t)) : (t.type==='cardpay'?'bank':'');
+    const dir = t.type==='repay' ? (t.dir==='in'?'in (they paid you)':'out (you paid them)') : '';
+    return [t.date,t.type,t.category||'',(t.desc||'').replace(/,/g,';'),t.amount,paidFrom,t.cashback||0,dir,t.paidBy||'',t.yourShare||0,person.replace(/,/g,';'),t.household?'Y':''];
   });
   const csv=[head.join(','),...rows.map(r=>r.join(','))].join('\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='ledger-'+nowMonth()+'.csv'; a.click();
