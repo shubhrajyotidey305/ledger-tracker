@@ -398,12 +398,17 @@ function render(){
   document.getElementById('hhHint').textContent = hh? ('household this month: '+fmt(hh)) : '';
 
   // people
-  const bal={};
-  S.txns.forEach(t=>{ const m=personDeltaMap(t); for(const n in m) bal[n]=(bal[n]||0)+m[n]; });
+  // case-insensitive: "Sahil" and "sahil" are the same person
+  const bal={}, disp={};
+  S.txns.forEach(t=>{ const m=personDeltaMap(t); for(const n in m){
+    const k=n.toLowerCase();
+    bal[k]=(bal[k]||0)+m[n];
+    if(!disp[k] || (disp[k][0]===disp[k][0].toLowerCase() && n[0]===n[0].toUpperCase())) disp[k]=n;
+  }});
   const names = Object.keys(bal).filter(n=>Math.abs(bal[n])>0.5);
   document.getElementById('people').innerHTML = names.length ? names.map(n=>{
     const v=bal[n];
-    return `<div class="p"><div><div class="who">${n}</div><div class="st">${v>=0?'owes you':'you owe'}</div></div><div class="bal ${v>=0?'pos':'neg'}">${fmt(Math.abs(v))}</div></div>`;
+    return `<div class="p"><div><div class="who">${disp[n]}</div><div class="st">${v>=0?'owes you':'you owe'}</div></div><div class="bal ${v>=0?'pos':'neg'}">${fmt(Math.abs(v))}</div></div>`;
   }).join('') : '<div class="empty">No splits or loans yet.</div>';
 
   // txns
