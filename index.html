@@ -107,6 +107,7 @@
       <select class="msel" id="month"></select>
       <button class="btn" id="setCash">Set cash</button>
       <button class="btn" id="payCard">Pay card bill</button>
+      <button class="btn" id="syncBtn">Sync</button><span id="syncStatus" style="font-size:11px;color:var(--faint);cursor:pointer;align-self:center" title="Sync settings"></span>
       <button class="btn" id="exportCsv">Export CSV</button>
       <button class="btn" id="backup">Copy backup</button>
       <button class="btn" id="restore">Restore</button>
@@ -241,7 +242,7 @@ const fmt = n => "₹" + Math.round(n).toLocaleString('en-IN');
 const monthKey = d => d.slice(0,7);
 const nowMonth = () => new Date().toISOString().slice(0,7);
 
-let S = {txns:[], budgets:{}, settings:{startingCash:72612}, type:"expense", month:nowMonth()};
+let S = {txns:[], budgets:{}, settings:{startingCash:72612}, deleted:[], type:"expense", month:nowMonth()};
 
 // Storage adapter: uses Claude's window.storage inside the artifact,
 // falls back to localStorage when deployed standalone (Netlify, etc.)
@@ -261,7 +262,63 @@ async function load(){
   S.txns = await getJSON('ledger:txns', []);
   S.budgets = await getJSON('ledger:budgets', {...DEFAULT_BUDGETS});
   S.settings = await getJSON('ledger:settings', {startingCash:72612});
+  S.deleted = await getJSON('ledger:deleted', []);
   await migrateSplits();
+}
+
+/* ---- cross-device sync (Netlify Blobs via /api/sync) ---- */
+const SYNC = {code:null, busy:false, timer:null};
+function setSyncStatus(s){ const e=document.getElementById('syncStatus'); if(e) e.textContent=s; }
+async function markEdit(){ await rawSet('ledger:lastEdit', String(Date.now())); }
+function scheduleSync(){ if(!SYNC.code) return; clearTimeout(SYNC.timer); SYNC.timer=setTimeout(()=>doSync(false), 1500); }
+async function syncKey(){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('ledger-sync:'+SYNC.code));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+// Merge-then-push. Transactions are immutable, so merging = union by id minus
+// tombstoned deletes; budgets/settings go to whichever side edited most recently.
+async function doSync(manual){
+  if(!SYNC.code || SYNC.busy) return;
+  SYNC.busy = true; setSyncStatus('syncing…');
+  try{
+    const key = await syncKey();
+    const res = await fetch('/api/sync?key='+key, {cache:'no-store'});
+    if(!res.ok) throw new Error('pull failed ('+res.status+')');
+    const remote = await res.json(); // null on first ever sync
+    const lastEdit = +(await rawGet('ledger:lastEdit'))||0;
+    let remoteEdit = 0;
+    if(remote && Array.isArray(remote.txns)){
+      remoteEdit = remote.lastEdit||0;
+      const del = new Set([...(remote.deleted||[]), ...S.deleted]);
+      const byId = {};
+      [...S.txns, ...remote.txns].forEach(t=>{ if(t && !del.has(t.id) && !(t.id in byId)) byId[t.id]=t; });
+      S.txns = Object.values(byId).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
+      S.deleted = [...del];
+      if(remoteEdit > lastEdit){
+        if(remote.budgets && typeof remote.budgets==='object') S.budgets = remote.budgets;
+        if(remote.settings && typeof remote.settings==='object') S.settings = remote.settings;
+      }
+      await setJSON('ledger:txns', S.txns);
+      await setJSON('ledger:budgets', S.budgets);
+      await setJSON('ledger:settings', S.settings);
+      await setJSON('ledger:deleted', S.deleted);
+    }
+    const payload = {v:2, lastEdit:Math.max(lastEdit, remoteEdit), txns:S.txns, budgets:S.budgets, settings:S.settings, deleted:S.deleted};
+    const put = await fetch('/api/sync?key='+key, {method:'PUT', body:JSON.stringify(payload)});
+    if(!put.ok) throw new Error('push failed ('+put.status+')');
+    setSyncStatus('synced '+new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}));
+    fillCatSelect(); render();
+  }catch(e){
+    setSyncStatus('sync failed');
+    if(manual) alert('Sync failed: '+e.message+'\nYour data is safe on this device and will sync next time it connects.');
+  }finally{ SYNC.busy = false; }
+}
+async function setupSync(){
+  const v = prompt('Sync code — any secret phrase. Enter the SAME code on your other device to share data. Longer = safer.\n\nLeave empty to turn sync off.', SYNC.code||'');
+  if(v===null) return;
+  SYNC.code = v.trim()||null;
+  await rawSet('ledger:synccode', SYNC.code||'');
+  if(SYNC.code) doSync(true); else setSyncStatus('off');
 }
 
 /* ---- domain math ---- */
@@ -435,7 +492,12 @@ function render(){
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
 }
 
-async function delTx(id){ S.txns=S.txns.filter(t=>t.id!==id); await setJSON('ledger:txns',S.txns); render(); }
+async function delTx(id){
+  S.txns=S.txns.filter(t=>t.id!==id);
+  if(!S.deleted.includes(id)) S.deleted.push(id); // tombstone so sync doesn't resurrect it
+  await setJSON('ledger:txns',S.txns); await setJSON('ledger:deleted',S.deleted);
+  await markEdit(); scheduleSync(); render();
+}
 
 async function openCardPay(){
   const owed = S.txns.reduce((s,t)=>s+cardDelta(t),0);
@@ -445,6 +507,7 @@ async function openCardPay(){
   if(isNaN(amt)||amt<=0) return;
   S.txns.push({id:Date.now(), type:'cardpay', amount:amt, date:new Date().toISOString().slice(0,10), desc:'Credit-card bill payment', yourShare:0, cp:false, cpName:''});
   await setJSON('ledger:txns', S.txns);
+  await markEdit(); scheduleSync();
   render();
 }
 
@@ -552,6 +615,7 @@ async function add(){
 
   S.txns.push(t);
   await setJSON('ledger:txns', S.txns);
+  await markEdit(); scheduleSync();
   // reset
   ['amount','desc','yourShare','cpExp','cpPerson','cashbackAmt'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('spread').value='m1';
@@ -602,6 +666,7 @@ async function restoreFromText(txt){
   await setJSON('ledger:budgets', S.budgets);
   await setJSON('ledger:settings', S.settings);
   await migrateSplits(); // old-format backups get per-person splits too
+  await markEdit(); scheduleSync();
   fillCatSelect(); render();
   alert('Restored '+txns.length+' transactions.');
   return true;
@@ -638,6 +703,7 @@ function renderBudgetEditor(){
     capture();
     S.budgets[name]=parseFloat(document.getElementById('newCatBud').value)||0;
     await setJSON('ledger:budgets', S.budgets);
+    await markEdit(); scheduleSync();
     fillCatSelect();
     renderBudgetEditor();
     render();
@@ -645,6 +711,7 @@ function renderBudgetEditor(){
   el.querySelector('#saveBud').onclick=async()=>{
     capture();
     await setJSON('ledger:budgets', S.budgets);
+    await markEdit(); scheduleSync();
     el.classList.add('hidden');
     render();
   };
@@ -691,12 +758,21 @@ async function init(){
   async function editCash(){
     const flows=S.txns.reduce((s,t)=>s+cashDelta(t),0);
     const v=prompt('Cash on hand right now (\u20b9):', Math.round(S.settings.startingCash+flows));
-    if(v!==null && !isNaN(parseFloat(v))){ S.settings.startingCash=parseFloat(v)-flows; await setJSON('ledger:settings',S.settings); render(); }
+    if(v!==null && !isNaN(parseFloat(v))){ S.settings.startingCash=parseFloat(v)-flows; await setJSON('ledger:settings',S.settings); await markEdit(); scheduleSync(); render(); }
   }
   document.getElementById('setCash').onclick=editCash;
   document.getElementById('cashCard').onclick=editCash;
   document.getElementById('payCard').onclick=openCardPay;
   document.getElementById('cardTile').onclick=openCardPay;
+  // sync
+  SYNC.code = (await rawGet('ledger:synccode'))||null;
+  document.getElementById('syncBtn').onclick=()=>SYNC.code ? doSync(true) : setupSync();
+  document.getElementById('syncStatus').onclick=setupSync;
+  if(SYNC.code){
+    setSyncStatus('on');
+    doSync(false);
+    window.addEventListener('focus', ()=>doSync(false)); // pull fresh when you come back
+  }
   setType('expense');
   render();
 }
