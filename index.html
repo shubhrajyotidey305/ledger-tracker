@@ -175,10 +175,18 @@
         <div id="splitFields" class="hidden">
           <div class="row">
             <div class="f"><label>Paid by</label><select id="paidBy"><option value="you">You</option><option value="other">Someone else</option></select></div>
-            <div class="f"><label>Your share (₹)</label><input class="num" id="yourShare" type="number" placeholder="0"></div>
+            <div class="f"><label>Your share (₹)</label><input class="num" id="yourShare" type="number" placeholder="auto = rest"></div>
           </div>
-          <div class="row">
-            <div class="f"><label>Person / group</label><input id="cpExp" placeholder="e.g. Raj, or Flat"></div>
+          <div class="row hidden" id="payerRow">
+            <div class="f"><label>Who paid?</label><input id="cpExp" placeholder="e.g. Raj"></div>
+          </div>
+          <div id="othersBlock">
+            <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin:2px 0 7px">Each person's share <span id="shareHint" style="color:var(--faint);text-transform:none;letter-spacing:0;font-size:11px"></span></div>
+            <div id="splitRows"></div>
+            <div class="row" style="gap:8px;margin-top:2px">
+              <button class="btn" type="button" id="addPerson">+ Add person</button>
+              <button class="btn" type="button" id="eqSplit">&divide; Split equally</button>
+            </div>
           </div>
         </div>
         <label class="toggle"><input type="checkbox" id="household"> Household expense</label>
@@ -245,18 +253,55 @@ async function load(){
   S.txns = await getJSON('ledger:txns', []);
   S.budgets = await getJSON('ledger:budgets', {...DEFAULT_BUDGETS});
   S.settings = await getJSON('ledger:settings', {startingCash:72612});
+  await migrateSplits();
 }
 
 /* ---- domain math ---- */
-function personDelta(t){ // + = counterparty owes you more
-  if(t.type==='lend') return t.amount;
-  if(t.type==='repay') return t.dir==='in' ? -t.amount : t.amount;
-  if(t.type==='expense' && t.cp){
-    if(t.paidBy==='other') return -t.yourShare;
-    const net = t.amount - (t.cashback||0); // cashback shared before splitting
-    return net - t.yourShare;
+// Per-person balances. t.splits = [{name, share}] when an entry involves
+// multiple people; entries without splits fall back to the old single-name math.
+function personDeltaMap(t){ // {name: delta}; + = they owe you more
+  const m={};
+  const put=(n,v)=>{ if(n&&v) m[n]=(m[n]||0)+v; };
+  const hasSplits = Array.isArray(t.splits) && t.splits.length>0;
+  const each=sign=>t.splits.forEach(s=>put(s.name,sign*(+s.share||0)));
+  if(t.type==='lend'){
+    hasSplits ? each(1) : put(t.cpName, t.amount);
+  } else if(t.type==='repay'){
+    const sign = t.dir==='in' ? -1 : 1;
+    hasSplits ? each(sign) : put(t.cpName, sign*t.amount);
+  } else if(t.type==='expense' && t.cp){
+    if(t.paidBy==='other'){
+      hasSplits ? each(-1) : put(t.cpName, -t.yourShare); // you owe the payer
+    } else if(hasSplits){
+      each(1); // each person owes you their share
+    } else {
+      const net = t.amount - (t.cashback||0); // cashback shared before splitting
+      put(t.cpName, net - t.yourShare);
+    }
   }
-  return 0;
+  return m;
+}
+function personDelta(t){ const m=personDeltaMap(t); let s=0; for(const k in m) s+=m[k]; return s; }
+
+// One-time migration: old multi-person entries ("Sahil, Devoneel" as one name)
+// get equal per-person splits. Original data is backed up untouched first.
+async function migrateSplits(){
+  const namesOf = t => (t.cpName||'').split(/[,&+]/).map(s=>s.trim()).filter(Boolean);
+  const needs = t => !t.splits && t.cp && (t.type==='expense'||t.type==='lend'||t.type==='repay') && namesOf(t).length>1;
+  if(!S.txns.some(needs)) return;
+  if(!(await rawGet('ledger:premigration-backup')))
+    await rawSet('ledger:premigration-backup', JSON.stringify({savedAt:new Date().toISOString(), txns:S.txns}));
+  S.txns.forEach(t=>{
+    if(!needs(t)) return;
+    const names = namesOf(t);
+    let total;
+    if(t.type==='expense') total = t.paidBy==='other' ? t.yourShare : (t.amount-(t.cashback||0))-t.yourShare;
+    else total = t.amount;
+    const per = total/names.length;
+    t.splits = names.map(n=>({name:n, share:per}));
+    t.autoSplit = true; // marker: shares were derived by equal division
+  });
+  await setJSON('ledger:txns', S.txns);
 }
 function srcOf(t){ return t.src || (t.card ? 'card' : 'bank'); } // back-compat with old card flag
 function cashDelta(t){
@@ -354,7 +399,7 @@ function render(){
 
   // people
   const bal={};
-  S.txns.forEach(t=>{ const d=personDelta(t); if(d&&t.cpName){ bal[t.cpName]=(bal[t.cpName]||0)+d; } });
+  S.txns.forEach(t=>{ const m=personDeltaMap(t); for(const n in m) bal[n]=(bal[n]||0)+m[n]; });
   const names = Object.keys(bal).filter(n=>Math.abs(bal[n])>0.5);
   document.getElementById('people').innerHTML = names.length ? names.map(n=>{
     const v=bal[n];
@@ -368,7 +413,10 @@ function render(){
     const cls = sign==='+'?'pos':(sign==='~'?'':'');
     const spreadTag = t.spreadDays>1 ? ('· \u00f7'+t.spreadDays+'d') : (t.spread>1?('· \u00f7'+t.spread+'mo'):'');
     const srcTag = t.type==='expense' ? (srcOf(t)==='card'?'· card':(srcOf(t)==='wallet'?'· wallet':'')) : '';
-    const meta = [t.category||t.type, t.cpName?('· '+t.cpName):'', t.household?'· household':'', srcTag, spreadTag].filter(Boolean).join(' ');
+    const who = (Array.isArray(t.splits)&&t.splits.length)
+      ? t.splits.map(s=>s.name+' '+fmt(s.share)).join(', ') + (t.paidBy==='other'?' (you owe)':'')
+      : t.cpName;
+    const meta = [t.category||t.type, who?('· '+who):'', t.household?'· household':'', srcTag, spreadTag].filter(Boolean).join(' ');
     return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="del" data-id="${t.id}">×</button></div>`;
   }).join('') : '<div class="empty">No entries yet — add your first above.</div>';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
@@ -401,6 +449,48 @@ function setType(type){
   document.getElementById('addBtn').textContent = 'Add '+type;
 }
 
+/* split rows (one per person) */
+function addSplitRow(name='',share=''){
+  const c=document.getElementById('splitRows');
+  const row=document.createElement('div');
+  row.className='row split-row';
+  row.style.cssText='align-items:flex-end;flex-wrap:nowrap';
+  row.innerHTML=`<div class="f"><label>Person</label><input class="sp-name" placeholder="e.g. Sahil" value="${name}"></div>`+
+    `<div class="f" style="max-width:120px;min-width:90px"><label>Share (₹)</label><input class="num sp-share" type="number" inputmode="decimal" placeholder="0" value="${share}"></div>`+
+    `<button type="button" class="sp-del" style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:17px;padding:0 4px 9px">×</button>`;
+  row.querySelector('.sp-del').onclick=()=>{ row.remove(); updateShareHint(); };
+  row.querySelectorAll('input').forEach(i=>i.oninput=updateShareHint);
+  c.appendChild(row);
+  return row;
+}
+function getSplits(){
+  return [...document.querySelectorAll('#splitRows .split-row')].map(r=>({
+    name:r.querySelector('.sp-name').value.trim(),
+    share:parseFloat(r.querySelector('.sp-share').value)||0
+  })).filter(s=>s.name);
+}
+function updateShareHint(){
+  const amt=parseFloat(document.getElementById('amount').value)||0;
+  const cb=parseFloat(document.getElementById('cashbackAmt').value)||0;
+  const others=getSplits().reduce((s,x)=>s+x.share,0);
+  const el=document.getElementById('shareHint');
+  if(!others){ el.textContent=''; return; }
+  const rem=amt-cb-others;
+  el.textContent=`— others ${fmt(others)}${amt?`, yours ${fmt(Math.max(0,rem))}`:''}`;
+}
+function splitEqually(){
+  const amt=parseFloat(document.getElementById('amount').value)||0;
+  if(!amt){ document.getElementById('amount').focus(); return; }
+  const cb=parseFloat(document.getElementById('cashbackAmt').value)||0;
+  const rows=[...document.querySelectorAll('#splitRows .split-row')].filter(r=>r.querySelector('.sp-name').value.trim());
+  if(!rows.length){ alert('Add the people first, then split equally.'); return; }
+  const n=rows.length+1; // them + you
+  const per=Math.round((amt-cb)/n*100)/100;
+  rows.forEach(r=>r.querySelector('.sp-share').value=per);
+  document.getElementById('yourShare').value=Math.round(((amt-cb)-per*rows.length)*100)/100;
+  updateShareHint();
+}
+
 async function add(){
   const amount = parseFloat(document.getElementById('amount').value);
   if(!amount || amount<=0){ document.getElementById('amount').focus(); return; }
@@ -418,8 +508,20 @@ async function add(){
     if(document.getElementById('isSplit').checked){
       t.cp=true; t.paidBy=document.getElementById('paidBy').value;
       const ys=parseFloat(document.getElementById('yourShare').value);
-      t.yourShare = isNaN(ys)?amount:ys;
-      t.cpName=document.getElementById('cpExp').value.trim();
+      if(t.paidBy==='other'){
+        t.yourShare = isNaN(ys)?amount:ys;
+        t.cpName=document.getElementById('cpExp').value.trim();
+        if(!t.cpName){ alert('Who paid? Add their name.'); document.getElementById('cpExp').focus(); return; }
+      } else {
+        const splits=getSplits();
+        if(!splits.length){ alert('Add at least one person and their share.'); return; }
+        const others=splits.reduce((s,x)=>s+x.share,0);
+        const net=amount-(t.cashback||0);
+        t.yourShare = isNaN(ys) ? Math.max(0, net-others) : ys;
+        if(Math.abs(t.yourShare+others-net) > 0.5 && !confirm(`Shares (${fmt(others)} others + ${fmt(t.yourShare)} you) don't add up to ${fmt(net)}. Add anyway?`)) return;
+        t.splits=splits;
+        t.cpName=splits.map(s=>s.name).join(', ');
+      }
     } else if(t.cashback){
       t.yourShare = amount - t.cashback; // solo: cashback nets your cost
     }
@@ -443,17 +545,27 @@ async function add(){
   document.getElementById('paySrc').value='bank';
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
   document.getElementById('splitFields').classList.add('hidden');
+  document.getElementById('splitRows').innerHTML='';
+  document.getElementById('shareHint').textContent='';
+  document.getElementById('paidBy').value='you';
+  document.getElementById('payerRow').classList.add('hidden');
+  document.getElementById('othersBlock').classList.remove('hidden');
   document.getElementById('amount').focus();
   render();
 }
 
 function exportCsv(){
   const head=['date','type','category','description','amount','paid_by','your_share','person','household'];
-  const rows=S.txns.map(t=>[t.date,t.type,t.category||'',(t.desc||'').replace(/,/g,';'),t.amount,t.paidBy||'',t.yourShare||0,t.cpName||'',t.household?'Y':'']);
+  const rows=S.txns.map(t=>{
+    const person = (Array.isArray(t.splits)&&t.splits.length)
+      ? t.splits.map(s=>s.name+': '+(Math.round(s.share*100)/100)).join(' | ')
+      : (t.cpName||'');
+    return [t.date,t.type,t.category||'',(t.desc||'').replace(/,/g,';'),t.amount,t.paidBy||'',t.yourShare||0,person.replace(/,/g,';'),t.household?'Y':''];
+  });
   const csv=[head.join(','),...rows.map(r=>r.join(','))].join('\n');
   const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='ledger-'+nowMonth()+'.csv'; a.click();
 }
-function snapshot(){ return {v:1, exportedAt:new Date().toISOString(), txns:S.txns, budgets:S.budgets, settings:S.settings}; }
+function snapshot(){ return {v:2, exportedAt:new Date().toISOString(), txns:S.txns, budgets:S.budgets, settings:S.settings}; }
 async function backup(){
   const json=JSON.stringify(snapshot());
   try{
@@ -476,6 +588,7 @@ async function restoreFromText(txt){
   await setJSON('ledger:txns', S.txns);
   await setJSON('ledger:budgets', S.budgets);
   await setJSON('ledger:settings', S.settings);
+  await migrateSplits(); // old-format backups get per-person splits too
   fillCatSelect(); render();
   alert('Restored '+txns.length+' transactions.');
   return true;
@@ -530,7 +643,19 @@ async function init(){
   await load();
   fillCatSelect();
   document.querySelectorAll('.types .t').forEach(el=>el.onclick=()=>setType(el.dataset.type));
-  document.getElementById('isSplit').onchange=e=>document.getElementById('splitFields').classList.toggle('hidden',!e.target.checked);
+  document.getElementById('isSplit').onchange=e=>{
+    document.getElementById('splitFields').classList.toggle('hidden',!e.target.checked);
+    if(e.target.checked && !document.querySelector('#splitRows .split-row')) addSplitRow();
+  };
+  document.getElementById('paidBy').onchange=e=>{
+    const other=e.target.value==='other';
+    document.getElementById('payerRow').classList.toggle('hidden',!other);
+    document.getElementById('othersBlock').classList.toggle('hidden',other);
+  };
+  document.getElementById('addPerson').onclick=()=>addSplitRow().querySelector('.sp-name').focus();
+  document.getElementById('eqSplit').onclick=splitEqually;
+  document.getElementById('amount').oninput=updateShareHint;
+  document.getElementById('cashbackAmt').oninput=updateShareHint;
   document.getElementById('addBtn').onclick=add;
   document.getElementById('month').onchange=e=>{S.month=e.target.value;render();};
   document.getElementById('exportCsv').onclick=exportCsv;
