@@ -551,18 +551,7 @@ function groupNet(){
   });
   return net;
 }
-// Raw (unsimplified): show every debtor→creditor pair directly from net positions
-function rawPayments(net){
-  const payments=[];
-  for(const [debtor,bal] of Object.entries(net)){
-    if(bal>=-0.5) continue;
-    for(const [creditor,cbal] of Object.entries(net)){
-      if(cbal<=0.5) continue;
-      payments.push({from:debtor,to:creditor,amount:Math.round(Math.abs(bal))});
-    }
-  }
-  return payments;
-}
+
 function simplifyDebts(net){
   const c=[],d=[];
   for(const [n,b] of Object.entries(net)){
@@ -616,16 +605,17 @@ function renderGroup(){
   const useSimplify = S.settings.simplifyDebts !== false;
   const btn = document.getElementById('simplifyToggleBtn');
   if(btn){ btn.textContent = useSimplify ? 'Simplify: ON' : 'Simplify: OFF'; btn.style.borderColor = useSimplify ? 'var(--green)' : 'var(--line)'; btn.style.color = useSimplify ? 'var(--green)' : 'var(--muted)'; }
-  const payments = useSimplify ? simplifyDebts(net) : rawPayments(net);
-  const settleLabel = useSimplify ? `Simplified — settle in ${payments.length} payment${payments.length>1?'s':''}` : `All debts — ${payments.length} payment${payments.length>1?'s':''}`;
-  if(payments.length){
-    html+=`<div class="settle-list"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">${settleLabel}</div>`;
-    payments.forEach(p=>{
-      html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`;
-    });
-    html+='</div>';
-  } else {
-    html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
+  if(useSimplify){
+    const payments = simplifyDebts(net);
+    if(payments.length){
+      html+=`<div class="settle-list"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Simplified — settle in ${payments.length} payment${payments.length>1?'s':''}</div>`;
+      payments.forEach(p=>{
+        html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`;
+      });
+      html+='</div>';
+    } else {
+      html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
+    }
   }
   content.innerHTML=html;
 }
