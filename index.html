@@ -95,6 +95,24 @@
   .tx .del:hover{color:var(--clay)}
 
   .note{color:var(--faint);font-size:11.5px;text-align:center;margin-top:24px;line-height:1.6}
+
+  /* group panel */
+  .gbal{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .gbal:last-child{border:none}
+  .gbal .gname{color:var(--text);font-weight:500}
+  .gbal .gst{font-size:11px;color:var(--faint)}
+  .gbal .gamt{font-family:'JetBrains Mono',monospace;font-weight:500}
+  .settle-list{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+  .settle-item{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .settle-item:last-child{border:none}
+  .settle-names{flex:1;min-width:120px}
+  .settle-arrow{color:var(--faint);font-size:12px;margin:0 2px}
+  .settle-log{font-size:11.5px;background:var(--panel-2);border:1px solid var(--amber-soft);color:var(--amber);border-radius:8px;padding:4px 10px;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .settle-log:hover{background:var(--amber);color:#1a1407}
+  .gs-row{display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:13px}
+  .gs-name{width:88px;color:var(--text);flex-shrink:0}
+  .gs-input{flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:7px 10px;font-size:13px;font-family:'JetBrains Mono',monospace}
+  .gs-input:focus{outline:none;border-color:var(--amber)}
   @media(max-width:680px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
 </style>
 
@@ -144,6 +162,8 @@
         <div class="t" data-type="transfer">Transfer</div>
         <div class="t" data-type="cashback">Cashback</div>
         <div class="t" data-type="opening">Opening</div>
+        <div class="t" data-type="group">Group</div>
+        <div class="t" data-type="group-settle">Settle</div>
       </div>
 
       <div class="row">
@@ -224,6 +244,26 @@
         </div>
       </div>
 
+      <!-- group expense -->
+      <div id="groupBlock" class="hidden">
+        <div class="row">
+          <div class="f"><label>Paid by</label><select id="groupPayer"></select></div>
+          <div class="f" style="justify-content:flex-end"><button class="btn" type="button" id="groupEq" style="align-self:flex-end">&divide; Equal split</button></div>
+        </div>
+        <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Each member's share</div>
+        <div id="groupShares"></div>
+        <div style="font-size:11.5px;color:var(--faint);margin:-2px 0 8px">Group-only — doesn't affect your personal budget or cash.</div>
+      </div>
+
+      <!-- group settle-up -->
+      <div id="settleBlock" class="hidden">
+        <div class="row">
+          <div class="f"><label>Paid by</label><select id="settleFrom"></select></div>
+          <div class="f"><label>Paid to</label><select id="settleTo"></select></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin:-4px 0 8px">If you paid, this also reduces your cash balance.</div>
+      </div>
+
       <button class="add" id="addBtn">Add expense</button>
     </div>
 
@@ -239,6 +279,19 @@
         <div class="plist" id="people"><div class="empty">No splits or loans yet.</div></div>
       </div>
     </div>
+  </div>
+
+  <!-- GROUP PANEL -->
+  <div class="card" id="groupCard" style="margin-top:14px">
+    <h2>Group <span class="hint" id="groupNameHint"></span>
+      <button id="setupGroupBtn" style="padding:5px 12px;font-size:12px;background:var(--panel-2);border:1px solid var(--amber-soft);color:var(--amber);border-radius:9px;cursor:pointer;font-family:'Hanken Grotesk';font-weight:600;white-space:nowrap">&#9998; Setup</button>
+    </h2>
+    <div id="groupSetupPanel" class="hidden" style="margin-bottom:14px;padding:13px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
+      <div class="row"><div class="f"><label>Group name (optional)</label><input id="groupNameInput" placeholder="e.g. A-144 Noida"></div></div>
+      <div class="f" style="margin-bottom:10px"><label>Members — comma-separated, not including you</label><input id="groupMembersInput" placeholder="e.g. Sahil, Vipin, Devoneel"></div>
+      <div style="display:flex;gap:8px"><button class="add" id="saveGroupBtn" style="margin:0;max-width:160px">Save group</button><button class="btn" id="cancelGroupBtn">Cancel</button></div>
+    </div>
+    <div id="groupContent"><div class="empty">Set up your group above to track shared balances and simplify debts.</div></div>
   </div>
 
   <div class="card txns" style="margin-top:14px">
@@ -396,6 +449,7 @@ function cashDelta(t){
   if(t.type==='repay') return t.dir==='in' ? t.amount : -t.amount;
   if(t.type==='transfer') return -t.amount;
   if(t.type==='cardpay') return -t.amount;
+  if(t.type==='group-settle') return t.from==='you' ? -t.amount : 0;
   return 0;
 }
 function cardDelta(t){ // + = owe more on card
@@ -438,6 +492,165 @@ function budgetSliceForMonth(t, ym){
   const off = monthsBetween(monthKey(t.date), ym);
   if(off<0 || off>=sp) return 0;
   return t.yourShare / sp;
+}
+
+/* ---- group ledger ---- */
+function gMembers(){ // all members including 'you' (lowercase keys)
+  const g=S.settings.group;
+  if(!g||!g.members||!g.members.length) return [];
+  return ['you',...g.members.map(m=>m.toLowerCase())];
+}
+function isGroupMember(name){
+  if(!name) return false;
+  const g=S.settings.group;
+  if(!g||!g.members) return false;
+  return name.toLowerCase()==='you' || g.members.some(m=>m.toLowerCase()===name.toLowerCase());
+}
+function dispName(key){ // lowercase key → display name
+  if(!key) return '';
+  if(key==='you') return 'You';
+  const g=S.settings.group;
+  const m=g&&g.members&&g.members.find(n=>n.toLowerCase()===key.toLowerCase());
+  return m||(key.charAt(0).toUpperCase()+key.slice(1));
+}
+function groupNet(){
+  const net={};
+  gMembers().forEach(m=>net[m]=0);
+  S.txns.forEach(t=>{
+    // Opening balance entries for group members contribute to group net
+    if(t.type==='opening' && isGroupMember(t.cpName)){
+      const k=t.cpName.toLowerCase();
+      if(!(k in net)) net[k]=0;
+      if(t.dir==='owe'){ net['you']+= t.amount; net[k]-= t.amount; }
+      else             { net['you']-= t.amount; net[k]+= t.amount; }
+    }
+    // Group expense
+    if(t.type==='group' && Array.isArray(t.shares)){
+      const pk=t.payer==='you'?'you':t.payer.toLowerCase();
+      if(!(pk in net)) net[pk]=0;
+      t.shares.forEach(s=>{
+        const sk=s.name==='you'?'you':s.name.toLowerCase();
+        if(!(sk in net)) net[sk]=0;
+        if(sk!==pk){ net[pk]+=+(s.share||0); net[sk]-=+(s.share||0); }
+      });
+    }
+    // Group settle
+    if(t.type==='group-settle'){
+      const fk=t.from==='you'?'you':t.from.toLowerCase();
+      const tk=t.to==='you'?'you':t.to.toLowerCase();
+      if(!(fk in net)) net[fk]=0;
+      if(!(tk in net)) net[tk]=0;
+      net[tk]-=t.amount; // receiver: debt to them is reduced
+      net[fk]+=t.amount; // payer: they owe less (debt relief)
+    }
+  });
+  return net;
+}
+function simplifyDebts(net){
+  const c=[],d=[];
+  for(const [n,b] of Object.entries(net)){
+    if(b > 0.5) c.push({name:n,bal:b});
+    else if(b < -0.5) d.push({name:n,bal:-b});
+  }
+  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>b.bal-a.bal);
+  const cv=c.map(x=>({...x})), dv=d.map(x=>({...x}));
+  const payments=[];
+  let ci=0,di=0;
+  while(ci<cv.length && di<dv.length){
+    const pay=Math.min(cv[ci].bal,dv[di].bal);
+    if(pay>0.5) payments.push({from:dv[di].name,to:cv[ci].name,amount:Math.round(pay)});
+    cv[ci].bal-=pay; dv[di].bal-=pay;
+    if(cv[ci].bal<0.5) ci++;
+    if(dv[di].bal<0.5) di++;
+  }
+  return payments;
+}
+async function logSettle(from,to,amount){
+  const v=prompt(`Log: ${dispName(from)} pays ${dispName(to)}\nAmount (₹):`,amount);
+  if(v===null) return;
+  const amt=parseFloat(v);
+  if(isNaN(amt)||amt<=0) return;
+  S.txns.push({id:Date.now(),type:'group-settle',amount:amt,date:new Date().toISOString().slice(0,10),desc:`${dispName(from)} → ${dispName(to)}`,from,to});
+  await setJSON('ledger:txns',S.txns);
+  await markEdit(); scheduleSync();
+  render();
+}
+function renderGroup(){
+  const g=S.settings.group;
+  const hint=document.getElementById('groupNameHint');
+  if(hint) hint.textContent=g&&g.name?('· '+g.name):'';
+  const content=document.getElementById('groupContent');
+  if(!content) return;
+  if(!g||!g.members||!g.members.length){
+    content.innerHTML='<div class="empty">Set up your group above to track shared balances and simplify debts.</div>';
+    return;
+  }
+  const net=groupNet();
+  let html='';
+  Object.entries(net).forEach(([m,v])=>{
+    const name=dispName(m);
+    if(Math.abs(v)<0.5)
+      html+=`<div class="gbal"><div><div class="gname">${name}</div><div class="gst">settled</div></div><div class="gamt" style="color:var(--faint)">₹0</div></div>`;
+    else if(v>0)
+      html+=`<div class="gbal"><div><div class="gname">${name}</div><div class="gst">is owed</div></div><div class="gamt pos">${fmt(v)}</div></div>`;
+    else
+      html+=`<div class="gbal"><div><div class="gname">${name}</div><div class="gst">owes</div></div><div class="gamt neg">${fmt(-v)}</div></div>`;
+  });
+  const payments=simplifyDebts(net);
+  if(payments.length){
+    html+=`<div class="settle-list"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Simplified — settle in ${payments.length} payment${payments.length>1?'s':''}</div>`;
+    payments.forEach(p=>{
+      html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`;
+    });
+    html+='</div>';
+  } else {
+    html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
+  }
+  content.innerHTML=html;
+}
+function populateGroupSelects(){
+  const members=gMembers();
+  if(!members.length) return;
+  const opts=members.map(m=>`<option value="${m}">${dispName(m)}</option>`).join('');
+  ['groupPayer','settleFrom','settleTo'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.innerHTML=opts;
+  });
+  renderGroupShares();
+}
+function renderGroupShares(){
+  const members=gMembers();
+  if(!members.length) return;
+  const c=document.getElementById('groupShares');
+  if(!c) return;
+  c.innerHTML=members.map(m=>`<div class="gs-row"><div class="gs-name">${dispName(m)}</div><input class="gs-input gs-share" data-member="${m}" type="number" inputmode="decimal" placeholder="0"></div>`).join('');
+}
+function groupEqualSplit(){
+  const amt=parseFloat(document.getElementById('amount').value)||0;
+  if(!amt){ document.getElementById('amount').focus(); return; }
+  const rows=[...document.querySelectorAll('.gs-share')];
+  const n=rows.length;
+  const per=Math.floor(amt/n*100)/100;
+  const rem=Math.round((amt-per*(n-1))*100)/100;
+  rows.forEach((r,i)=>r.value=i===n-1?rem:per);
+}
+async function setupGroup(){
+  const panel=document.getElementById('groupSetupPanel');
+  const g=S.settings.group||{};
+  document.getElementById('groupNameInput').value=g.name||'';
+  document.getElementById('groupMembersInput').value=(g.members||[]).join(', ');
+  panel.classList.toggle('hidden');
+}
+async function saveGroup(){
+  const name=(document.getElementById('groupNameInput').value||'').trim();
+  const members=document.getElementById('groupMembersInput').value.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
+  if(!members.length){ alert('Add at least one member.'); return; }
+  S.settings.group={name,members,startDate:new Date().toISOString().slice(0,10)};
+  await setJSON('ledger:settings',S.settings);
+  await markEdit(); scheduleSync();
+  document.getElementById('groupSetupPanel').classList.add('hidden');
+  populateGroupSelects();
+  renderGroup();
 }
 
 /* ---- render ---- */
@@ -496,7 +709,7 @@ function render(){
   // txns
   const recent = [...S.txns].sort((a,b)=> b.date.localeCompare(a.date) || b.id-a.id).slice(0,40);
   document.getElementById('txns').innerHTML = recent.length ? recent.map(t=>{
-    const sign = (t.type==='income'||t.type==='cashback'||(t.type==='repay'&&t.dir==='in')||(t.type==='opening'&&t.dir==='owe')) ? '+' : (t.type==='transfer'||t.type==='opening'?'~':'-');
+    const sign = (t.type==='income'||t.type==='cashback'||(t.type==='repay'&&t.dir==='in')||(t.type==='opening'&&t.dir==='owe')) ? '+' : (t.type==='transfer'||t.type==='opening'||t.type==='group'?'~':'-');
     const cls = sign==='+'?'pos':(sign==='~'?'':'');
     const spreadTag = t.spreadDays>1 ? ('· \u00f7'+t.spreadDays+'d') : (t.spread>1?('· \u00f7'+t.spread+'mo'):'');
     const srcTag = t.type==='expense' ? (srcOf(t)==='card'?'· card':(srcOf(t)==='wallet'?'· wallet':'')) : '';
@@ -507,6 +720,7 @@ function render(){
     return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="del" data-id="${t.id}">×</button></div>`;
   }).join('') : '<div class="empty">No entries yet — add your first above.</div>';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
+  renderGroup();
 }
 
 async function delTx(id){
@@ -533,14 +747,20 @@ function setType(type){
   S.type=type;
   document.querySelectorAll('.types .t').forEach(t=>t.classList.toggle('on',t.dataset.type===type));
   const isExp=type==='expense', isPerson=(type==='lend'||type==='repay'), isOpening=type==='opening';
+  const isGroup=type==='group', isSettle=type==='group-settle';
   document.getElementById('catF').style.display = isExp ? '' : 'none';
   document.getElementById('spreadRow').style.display = isExp ? '' : 'none';
   document.getElementById('cashbackRow').style.display = isExp ? '' : 'none';
   document.getElementById('splitBlock').classList.toggle('hidden', !isExp);
   document.getElementById('personBlock').classList.toggle('hidden', !isPerson);
   document.getElementById('openingBlock').classList.toggle('hidden', !isOpening);
+  document.getElementById('groupBlock').classList.toggle('hidden', !isGroup);
+  document.getElementById('settleBlock').classList.toggle('hidden', !isSettle);
+  // amount field not needed for settle (it has its own)
+  document.querySelector('.row:has(#amount)').style.display = isSettle ? 'none' : '';
   document.getElementById('dirF').style.display = type==='repay' ? '' : 'none';
-  document.getElementById('addBtn').textContent = isOpening ? 'Set opening balance' : ('Add '+type);
+  document.getElementById('addBtn').textContent =
+    isOpening ? 'Set opening balance' : isGroup ? 'Add group expense' : isSettle ? 'Log settlement' : ('Add '+type);
 }
 
 /* split rows (one per person) */
@@ -629,6 +849,21 @@ async function add(){
     t.yourShare=0; t.category='Transfer';
   } else if(S.type==='cashback'){
     t.yourShare=0; t.category='Cashback';
+  } else if(S.type==='group'){
+    t.yourShare=0; t.cp=false;
+    t.payer=document.getElementById('groupPayer').value;
+    const shares=[...document.querySelectorAll('.gs-share')].map(i=>({name:i.dataset.member,share:parseFloat(i.value)||0})).filter(s=>s.share>0);
+    if(!shares.length){ alert('Enter at least one share.'); return; }
+    const tot=shares.reduce((s,x)=>s+x.share,0);
+    if(Math.abs(tot-amount)>1 && !confirm(`Shares total ${fmt(tot)}, amount is ${fmt(amount)}. Add anyway?`)) return;
+    t.shares=shares; t.amount=tot;
+  } else if(S.type==='group-settle'){
+    const from=document.getElementById('settleFrom').value;
+    const to=document.getElementById('settleTo').value;
+    if(from===to){ alert('From and To must be different.'); return; }
+    const amt=parseFloat(document.getElementById('amount').value)||0;
+    if(!amt||amt<=0){ document.getElementById('amount').focus(); return; }
+    t.amount=amt; t.yourShare=0; t.cp=false; t.from=from; t.to=to;
   } else if(S.type==='opening'){
     t.yourShare=0; t.cp=true;
     t.cpName=document.getElementById('cpOpening').value.trim();
@@ -641,6 +876,7 @@ async function add(){
   await markEdit(); scheduleSync();
   // reset
   ['amount','desc','yourShare','cpExp','cpPerson','cpOpening','cashbackAmt'].forEach(id=>document.getElementById(id).value='');
+  document.querySelectorAll('.gs-share').forEach(i=>i.value='');
   document.getElementById('spread').value='m1';
   document.getElementById('paySrc').value='bank';
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
@@ -789,6 +1025,12 @@ async function init(){
   document.getElementById('cashCard').onclick=editCash;
   document.getElementById('payCard').onclick=openCardPay;
   document.getElementById('cardTile').onclick=openCardPay;
+  // group
+  document.getElementById('setupGroupBtn').onclick=setupGroup;
+  document.getElementById('saveGroupBtn').onclick=saveGroup;
+  document.getElementById('cancelGroupBtn').onclick=()=>document.getElementById('groupSetupPanel').classList.add('hidden');
+  document.getElementById('groupEq').onclick=groupEqualSplit;
+  populateGroupSelects();
   // sync
   SYNC.code = (await rawGet('ledger:synccode'))||null;
   document.getElementById('syncBtn').onclick=()=>SYNC.code ? doSync(true) : setupSync();
