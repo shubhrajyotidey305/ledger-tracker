@@ -685,7 +685,7 @@ function renderGroup(){
   const tabsCont=document.getElementById('groupTabs');
   if(tabsCont){
     const ag=getActiveGroup();
-    tabsCont.innerHTML=groups.map(g=>`<div class="gtab${g===ag?' on':''}" onclick="switchGroup('${g.id}')">${g.name||'Unnamed'}</div>`).join('');
+    tabsCont.innerHTML=groups.map(g=>`<div class="gtab${g===ag?' on':''}" onclick="switchGroup('${g.id}')" style="display:flex;align-items:center;gap:6px">${g.name||'Unnamed'}<span onclick="event.stopPropagation();deleteGroup('${g.id}')" title="Delete group" style="font-size:13px;line-height:1;opacity:.55;margin-left:2px;cursor:pointer">&times;</span></div>`).join('');
     tabsCont.style.display=groups.length?'flex':'none';
   }
   const g=getActiveGroup();
@@ -727,32 +727,57 @@ function renderGroup(){
   content.innerHTML=html;
 }
 function populateGroupSelects(g){
+  // g = which group to show members for (defaults to active)
   g=g||getActiveGroup();
+  // Update member dropdowns for the given group
   const members=gMembers(g);
   const opts=members.map(m=>`<option value="${m}">${dispName(m,g)}</option>`).join('');
   ['groupPayer','settleFrom','settleTo'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=opts; });
-  // group selector dropdowns (shown when 2+ groups)
+  // Rebuild group-selector options and set to g (not always the active group)
   const groups=getGroups();
   const gOpts=groups.map(gr=>`<option value="${gr.id}">${gr.name||'Unnamed'}</option>`).join('');
-  const ag=getActiveGroup();
+  const showSel=groups.length>1;
   ['groupSelector','settleSelector'].forEach(id=>{
     const el=document.getElementById(id); if(!el) return;
-    el.innerHTML=gOpts; if(ag) el.value=ag.id;
+    el.innerHTML=gOpts;
+    el.value=g.id; // set to the group whose members we just loaded
   });
-  const showSel=groups.length>1;
   const gsr=document.getElementById('groupSelectorRow'); if(gsr) gsr.classList.toggle('hidden',!showSel);
   const ssr=document.getElementById('settleSelectorRow'); if(ssr) ssr.classList.toggle('hidden',!showSel);
   renderGroupShares(g);
 }
 function onGroupSelectorChange(){
+  // User picked a different group in the expense form — update payer + shares only
   const id=document.getElementById('groupSelector').value;
   const g=getGroups().find(gr=>gr.id===id);
-  if(g){ populateGroupSelects(g); }
+  if(!g) return;
+  const members=gMembers(g);
+  const opts=members.map(m=>`<option value="${m}">${dispName(m,g)}</option>`).join('');
+  const payer=document.getElementById('groupPayer'); if(payer) payer.innerHTML=opts;
+  // keep settle selector in sync
+  const ss=document.getElementById('settleSelector'); if(ss) ss.value=id;
+  renderGroupShares(g);
 }
 function onSettleSelectorChange(){
   const id=document.getElementById('settleSelector').value;
   const g=getGroups().find(gr=>gr.id===id);
-  if(g){ populateGroupSelects(g); }
+  if(!g) return;
+  const members=gMembers(g);
+  const opts=members.map(m=>`<option value="${m}">${dispName(m,g)}</option>`).join('');
+  ['settleFrom','settleTo'].forEach(sel=>{ const el=document.getElementById(sel); if(el) el.innerHTML=opts; });
+  // keep group selector in sync
+  const gs=document.getElementById('groupSelector'); if(gs) gs.value=id;
+}
+async function deleteGroup(id){
+  const g=getGroups().find(gr=>gr.id===id);
+  if(!g) return;
+  if(!confirm(`Delete group "${g.name||'Unnamed'}"?\n\nIts transactions stay but won't appear in any group.`)) return;
+  S.settings.groups=S.settings.groups.filter(gr=>gr.id!==id);
+  if(S.settings.activeGroupId===id) S.settings.activeGroupId=(S.settings.groups[0]||{}).id||null;
+  await setJSON('ledger:settings',S.settings);
+  await markEdit(); scheduleSync();
+  document.getElementById('groupSetupPanel').classList.add('hidden');
+  populateGroupSelects(); renderGroup();
 }
 function renderGroupShares(g){
   g=g||getActiveGroup();
@@ -1073,9 +1098,10 @@ async function add(){
     t.yourShare=0; t.category='Cashback';
   } else if(S.type==='group'){
     t.yourShare=0; t.cp=false;
-    // determine which group this expense belongs to
+    // determine which group: use selector if visible (2+ groups), else active group
+    const gRow=document.getElementById('groupSelectorRow');
     const gSel=document.getElementById('groupSelector');
-    const gid=gSel&&gSel.offsetParent?gSel.value:(getActiveGroup()?.id);
+    const gid=(gRow&&!gRow.classList.contains('hidden')&&gSel?.value)?gSel.value:(getActiveGroup()?.id);
     t.groupId=gid;
     t.payer=document.getElementById('groupPayer').value;
     const shares=[...document.querySelectorAll('.gs-share')].map(i=>({name:i.dataset.member,share:parseFloat(i.value)||0})).filter(s=>s.share>0);
@@ -1084,8 +1110,9 @@ async function add(){
     if(Math.abs(tot-amount)>1 && !confirm(`Shares total ${fmt(tot)}, amount is ${fmt(amount)}. Add anyway?`)) return;
     t.shares=shares; t.amount=tot;
   } else if(S.type==='group-settle'){
+    const ssRow=document.getElementById('settleSelectorRow');
     const ssSel=document.getElementById('settleSelector');
-    const ssid=ssSel&&ssSel.offsetParent?ssSel.value:(getActiveGroup()?.id);
+    const ssid=(ssRow&&!ssRow.classList.contains('hidden')&&ssSel?.value)?ssSel.value:(getActiveGroup()?.id);
     t.groupId=ssid;
     const from=document.getElementById('settleFrom').value;
     const to=document.getElementById('settleTo').value;
@@ -1264,17 +1291,7 @@ async function init(){
   document.getElementById('newGroupBtn').onclick=()=>setupGroup(null);
   document.getElementById('saveGroupBtn').onclick=saveGroup;
   document.getElementById('cancelGroupBtn').onclick=()=>document.getElementById('groupSetupPanel').classList.add('hidden');
-  document.getElementById('deleteGroupBtn').onclick=async()=>{
-    const g=window._editingGroup;
-    if(!g||!g.id) return;
-    if(!confirm(`Delete group "${g.name||'Unnamed'}"? Its transactions will be unlinked but not deleted.`)) return;
-    S.settings.groups=S.settings.groups.filter(gr=>gr.id!==g.id);
-    if(S.settings.activeGroupId===g.id) S.settings.activeGroupId=(S.settings.groups[0]||{}).id||null;
-    await setJSON('ledger:settings',S.settings);
-    await markEdit(); scheduleSync();
-    document.getElementById('groupSetupPanel').classList.add('hidden');
-    populateGroupSelects(); renderGroup();
-  };
+  document.getElementById('deleteGroupBtn').onclick=()=>{ const g=window._editingGroup; if(g&&g.id) deleteGroup(g.id); };
   document.getElementById('groupEq').onclick=groupEqualSplit;
   populateGroupSelects();
   // sync
