@@ -554,7 +554,7 @@ function simplifyDebts(net){
     if(b > 0.5) c.push({name:n,bal:b});
     else if(b < -0.5) d.push({name:n,bal:-b});
   }
-  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>b.bal-a.bal);
+  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>a.bal-b.bal); // smallest debtor first = matches Splitwise routing
   const cv=c.map(x=>({...x})), dv=d.map(x=>({...x}));
   const payments=[];
   let ci=0,di=0;
