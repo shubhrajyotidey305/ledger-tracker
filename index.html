@@ -288,8 +288,10 @@
     </h2>
     <div id="groupSetupPanel" class="hidden" style="margin-bottom:14px;padding:13px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
       <div class="row"><div class="f"><label>Group name (optional)</label><input id="groupNameInput" placeholder="e.g. A-144 Noida"></div></div>
-      <div class="f" style="margin-bottom:10px"><label>Members — comma-separated, not including you</label><input id="groupMembersInput" placeholder="e.g. Sahil, Vipin, Devoneel"></div>
-      <div style="display:flex;gap:8px"><button class="add" id="saveGroupBtn" style="margin:0;max-width:160px">Save group</button><button class="btn" id="cancelGroupBtn">Cancel</button></div>
+      <div class="f" style="margin-bottom:12px"><label>Members — comma-separated, not including you</label><input id="groupMembersInput" placeholder="e.g. Sahil, Vipin, Devoneel" oninput="refreshOpeningRows()"></div>
+      <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Starting balances <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-size:11px">— from Splitwise "Group balances" screen. Positive = they're owed money (creditor), negative = they owe money (debtor). You are included.</span></div>
+      <div id="openingRows"></div>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="add" id="saveGroupBtn" style="margin:0;max-width:160px">Save group</button><button class="btn" id="cancelGroupBtn">Cancel</button></div>
     </div>
     <div id="groupContent"><div class="empty">Set up your group above to track shared balances and simplify debts.</div></div>
   </div>
@@ -516,14 +518,14 @@ function dispName(key){ // lowercase key → display name
 function groupNet(){
   const net={};
   gMembers().forEach(m=>net[m]=0);
+  // Seed from group starting balances (set in setup, sourced from Splitwise)
+  const op=(S.settings.group||{}).opening||{};
+  for(const [k,v] of Object.entries(op)){
+    const key=k==='you'?'you':k.toLowerCase();
+    if(!(key in net)) net[key]=0;
+    net[key]+=v;
+  }
   S.txns.forEach(t=>{
-    // Opening balance entries for group members contribute to group net
-    if(t.type==='opening' && isGroupMember(t.cpName)){
-      const k=t.cpName.toLowerCase();
-      if(!(k in net)) net[k]=0;
-      if(t.dir==='owe'){ net['you']+= t.amount; net[k]-= t.amount; }
-      else             { net['you']-= t.amount; net[k]+= t.amount; }
-    }
     // Group expense
     if(t.type==='group' && Array.isArray(t.shares)){
       const pk=t.payer==='you'?'you':t.payer.toLowerCase();
@@ -540,8 +542,8 @@ function groupNet(){
       const tk=t.to==='you'?'you':t.to.toLowerCase();
       if(!(fk in net)) net[fk]=0;
       if(!(tk in net)) net[tk]=0;
-      net[tk]-=t.amount; // receiver: debt to them is reduced
-      net[fk]+=t.amount; // payer: they owe less (debt relief)
+      net[tk]-=t.amount;
+      net[fk]+=t.amount;
     }
   });
   return net;
@@ -634,18 +636,33 @@ function groupEqualSplit(){
   const rem=Math.round((amt-per*(n-1))*100)/100;
   rows.forEach((r,i)=>r.value=i===n-1?rem:per);
 }
+function refreshOpeningRows(){
+  const raw=document.getElementById('groupMembersInput').value;
+  const members=['you',...raw.split(/[,;]+/).map(s=>s.trim()).filter(Boolean)];
+  const g=S.settings.group||{};
+  const prev=g.opening||{};
+  const inStyle='background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:7px 10px;font-size:13px;font-family:"JetBrains Mono",monospace;width:100%;box-sizing:border-box';
+  document.getElementById('openingRows').innerHTML=members.map(m=>{
+    const key=m==='you'?'you':m.toLowerCase();
+    const val=prev[key]!==undefined?prev[key]:'';
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px"><div style="width:90px;font-size:13px;color:var(--text);flex-shrink:0">${m==='you'?'You':m}</div><input class="op-bal" data-member="${key}" type="number" inputmode="decimal" placeholder="e.g. 9273 or -6369" value="${val}" style="${inStyle}"></div>`;
+  }).join('');
+}
 async function setupGroup(){
   const panel=document.getElementById('groupSetupPanel');
   const g=S.settings.group||{};
   document.getElementById('groupNameInput').value=g.name||'';
   document.getElementById('groupMembersInput').value=(g.members||[]).join(', ');
+  refreshOpeningRows();
   panel.classList.toggle('hidden');
 }
 async function saveGroup(){
   const name=(document.getElementById('groupNameInput').value||'').trim();
   const members=document.getElementById('groupMembersInput').value.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
   if(!members.length){ alert('Add at least one member.'); return; }
-  S.settings.group={name,members,startDate:new Date().toISOString().slice(0,10)};
+  const opening={};
+  document.querySelectorAll('.op-bal').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) opening[i.dataset.member]=v; });
+  S.settings.group={name,members,startDate:new Date().toISOString().slice(0,10),opening};
   await setJSON('ledger:settings',S.settings);
   await markEdit(); scheduleSync();
   document.getElementById('groupSetupPanel').classList.add('hidden');
