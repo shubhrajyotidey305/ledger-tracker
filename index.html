@@ -113,6 +113,10 @@
   .gs-name{width:88px;color:var(--text);flex-shrink:0}
   .gs-input{flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:7px 10px;font-size:13px;font-family:'JetBrains Mono',monospace}
   .gs-input:focus{outline:none;border-color:var(--amber)}
+  .gtabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+  .gtab{padding:5px 13px;font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;cursor:pointer;color:var(--muted);font-weight:500;transition:.15s}
+  .gtab:hover{border-color:var(--amber-soft);color:var(--text)}
+  .gtab.on{background:var(--amber);border-color:var(--amber);color:#1a1407;font-weight:700}
   @media(max-width:680px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
 </style>
 
@@ -246,6 +250,9 @@
 
       <!-- group expense -->
       <div id="groupBlock" class="hidden">
+        <div class="row hidden" id="groupSelectorRow">
+          <div class="f"><label>Group</label><select id="groupSelector" onchange="onGroupSelectorChange()"></select></div>
+        </div>
         <div class="row">
           <div class="f"><label>Paid by</label><select id="groupPayer"></select></div>
           <div class="f" style="justify-content:flex-end"><button class="btn" type="button" id="groupEq" style="align-self:flex-end">&divide; Equal split</button></div>
@@ -257,6 +264,9 @@
 
       <!-- group settle-up -->
       <div id="settleBlock" class="hidden">
+        <div class="row hidden" id="settleSelectorRow">
+          <div class="f"><label>Group</label><select id="settleSelector" onchange="onSettleSelectorChange()"></select></div>
+        </div>
         <div class="row">
           <div class="f"><label>Paid by</label><select id="settleFrom"></select></div>
           <div class="f"><label>Paid to</label><select id="settleTo"></select></div>
@@ -283,14 +293,17 @@
 
   <!-- GROUP PANEL -->
   <div class="card" id="groupCard" style="margin-top:14px">
-    <h2>Group <span class="hint" id="groupNameHint"></span>
-      <span style="display:flex;gap:8px;align-items:center">
+    <h2>Groups
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button id="simplifyToggleBtn" style="padding:5px 12px;font-size:12px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);border-radius:9px;cursor:pointer;font-family:'Hanken Grotesk';font-weight:600;white-space:nowrap"></button>
-        <button id="setupGroupBtn" style="padding:5px 12px;font-size:12px;background:var(--panel-2);border:1px solid var(--amber-soft);color:var(--amber);border-radius:9px;cursor:pointer;font-family:'Hanken Grotesk';font-weight:600;white-space:nowrap">&#9998; Setup</button>
+        <button id="setupGroupBtn" style="padding:5px 12px;font-size:12px;background:var(--panel-2);border:1px solid var(--amber-soft);color:var(--amber);border-radius:9px;cursor:pointer;font-family:'Hanken Grotesk';font-weight:600;white-space:nowrap">&#9998; Edit</button>
+        <button id="newGroupBtn" style="padding:5px 12px;font-size:12px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);border-radius:9px;cursor:pointer;font-family:'Hanken Grotesk';font-weight:600;white-space:nowrap">+ New group</button>
       </span>
     </h2>
+    <div class="gtabs" id="groupTabs"></div>
     <div id="groupSetupPanel" class="hidden" style="margin-bottom:14px;padding:13px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
-      <div class="row"><div class="f"><label>Group name (optional)</label><input id="groupNameInput" placeholder="e.g. A-144 Noida"></div></div>
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px" id="setupPanelTitle">New group</div>
+      <div class="row"><div class="f"><label>Group name</label><input id="groupNameInput" placeholder="e.g. A-144 Noida"></div></div>
       <div class="f" style="margin-bottom:12px"><label>Members — comma-separated, not including you</label><input id="groupMembersInput" placeholder="e.g. Sahil, Vipin, Devoneel" oninput="refreshOpeningRows()"></div>
       <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Opening debts <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-size:11px">— pairwise debts from Splitwise "without simplification" view. Or use the net helper below.</span></div>
       <div id="openingRows"></div>
@@ -302,9 +315,13 @@
           <button type="button" onclick="genPairsFromNet()" style="font-size:12px;background:var(--panel-2);border:1px solid var(--amber-soft);color:var(--amber);border-radius:8px;padding:5px 12px;cursor:pointer;margin-top:6px;font-family:inherit">Generate pairs →</button>
         </div>
       </details>
-      <div style="display:flex;gap:8px;margin-top:10px"><button class="add" id="saveGroupBtn" style="margin:0;max-width:160px">Save group</button><button class="btn" id="cancelGroupBtn">Cancel</button></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="add" id="saveGroupBtn" style="margin:0;max-width:160px">Save group</button>
+        <button class="btn" id="cancelGroupBtn">Cancel</button>
+        <button class="btn" id="deleteGroupBtn" style="color:var(--clay);border-color:var(--clay);margin-left:auto">Delete group</button>
+      </div>
     </div>
-    <div id="groupContent"><div class="empty">Set up your group above to track shared balances and simplify debts.</div></div>
+    <div id="groupContent"><div class="empty">Create a group above to track shared balances and simplify debts.</div></div>
   </div>
 
   <div class="card txns" style="margin-top:14px">
@@ -345,6 +362,7 @@ async function load(){
   S.settings = await getJSON('ledger:settings', {startingCash:72612});
   S.deleted = await getJSON('ledger:deleted', []);
   await migrateSplits();
+  await migrateToMultiGroup();
 }
 
 /* ---- cross-device sync (Netlify Blobs via /api/sync) ---- */
@@ -431,7 +449,7 @@ function personDeltaMap(t){ // {name: delta}; + = they owe you more
 }
 function personDelta(t){ const m=personDeltaMap(t); let s=0; for(const k in m) s+=m[k]; return s; }
 
-// One-time migration: old multi-person entries ("Sahil, Devoneel" as one name)
+/// One-time migration: old multi-person entries ("Sahil, Devoneel" as one name)
 // get equal per-person splits. Original data is backed up untouched first.
 async function migrateSplits(){
   const namesOf = t => (t.cpName||'').split(/[,&+]/).map(s=>s.trim()).filter(Boolean);
@@ -507,48 +525,75 @@ function budgetSliceForMonth(t, ym){
   return t.yourShare / sp;
 }
 
-/* ---- group ledger ---- */
-function gMembers(){ // all members including 'you' (lowercase keys)
-  const g=S.settings.group;
+/* ---- multi-group ledger ---- */
+function getGroups(){ return S.settings.groups||[]; }
+function getActiveGroup(){
+  const groups=getGroups();
+  if(!groups.length) return null;
+  return groups.find(g=>g.id===S.settings.activeGroupId)||groups[0];
+}
+async function switchGroup(id){
+  S.settings.activeGroupId=id;
+  await setJSON('ledger:settings',S.settings);
+  document.getElementById('groupSetupPanel').classList.add('hidden');
+  populateGroupSelects();
+  renderGroup();
+}
+/// Migration: S.settings.group (old single) → S.settings.groups[]
+async function migrateToMultiGroup(){
+  if(S.settings.groups!==undefined) return;
+  if(S.settings.group){
+    const id='grp_'+Date.now();
+    S.settings.groups=[{id,...S.settings.group}];
+    S.settings.activeGroupId=id;
+    let changed=false;
+    S.txns.forEach(t=>{
+      if((t.type==='group'||t.type==='group-settle')&&!t.groupId){ t.groupId=id; changed=true; }
+    });
+    if(changed) await setJSON('ledger:txns',S.txns);
+    delete S.settings.group;
+  } else {
+    S.settings.groups=[];
+  }
+  await setJSON('ledger:settings',S.settings);
+}
+function gMembers(g){ // all members including 'you' (lowercase keys)
+  g=g||getActiveGroup();
   if(!g||!g.members||!g.members.length) return [];
   return ['you',...g.members.map(m=>m.toLowerCase())];
 }
-function isGroupMember(name){
-  if(!name) return false;
-  const g=S.settings.group;
-  if(!g||!g.members) return false;
-  return name.toLowerCase()==='you' || g.members.some(m=>m.toLowerCase()===name.toLowerCase());
-}
-function dispName(key){ // lowercase key → display name
+function dispName(key,g){ // lowercase key → display name
   if(!key) return '';
   if(key==='you') return 'You';
-  const g=S.settings.group;
+  g=g||getActiveGroup();
   const m=g&&g.members&&g.members.find(n=>n.toLowerCase()===key.toLowerCase());
   return m||(key.charAt(0).toUpperCase()+key.slice(1));
 }
-function groupNet(){
+function groupNet(g){
+  g=g||getActiveGroup();
+  if(!g) return {};
   const net={};
-  gMembers().forEach(m=>net[m]=0);
-  // Seed from pairwise opening debts (new format)
-  const pairs=(S.settings.group||{}).openingPairs||[];
-  pairs.forEach(p=>{
+  gMembers(g).forEach(m=>net[m]=0);
+  // Pairwise opening debts
+  (g.openingPairs||[]).forEach(p=>{
     const fk=p.from==='you'?'you':p.from.toLowerCase();
     const tk=p.to==='you'?'you':p.to.toLowerCase();
-    if(!(fk in net)) net[fk]=0;
-    if(!(tk in net)) net[tk]=0;
-    net[fk]-=p.amount; // debtor
-    net[tk]+=p.amount; // creditor
+    if(!(fk in net)) net[fk]=0; if(!(tk in net)) net[tk]=0;
+    net[fk]-=p.amount; net[tk]+=p.amount;
   });
-  // Backward compat: also process old net-per-person opening format
-  const op=(S.settings.group||{}).opening||{};
+  // Backward compat: old net-per-person opening
+  const op=g.opening||{};
   for(const [k,v] of Object.entries(op)){
     const key=k==='you'?'you':k.toLowerCase();
     if(!(key in net)) net[key]=0;
     net[key]+=v;
   }
+  const isFirst=getGroups()[0]===g;
   S.txns.forEach(t=>{
-    // Group expense
-    if(t.type==='group' && Array.isArray(t.shares)){
+    // Only include txns for this group (legacy txns without groupId go to first group)
+    const belongs=(t.groupId&&t.groupId===g.id)||(isFirst&&!t.groupId);
+    if(!belongs) return;
+    if(t.type==='group'&&Array.isArray(t.shares)){
       const pk=t.payer==='you'?'you':t.payer.toLowerCase();
       if(!(pk in net)) net[pk]=0;
       t.shares.forEach(s=>{
@@ -557,14 +602,11 @@ function groupNet(){
         if(sk!==pk){ net[pk]+=+(s.share||0); net[sk]-=+(s.share||0); }
       });
     }
-    // Group settle
     if(t.type==='group-settle'){
       const fk=t.from==='you'?'you':t.from.toLowerCase();
       const tk=t.to==='you'?'you':t.to.toLowerCase();
-      if(!(fk in net)) net[fk]=0;
-      if(!(tk in net)) net[tk]=0;
-      net[tk]-=t.amount;
-      net[fk]+=t.amount;
+      if(!(fk in net)) net[fk]=0; if(!(tk in net)) net[tk]=0;
+      net[tk]-=t.amount; net[fk]+=t.amount;
     }
   });
   return net;
@@ -573,41 +615,38 @@ function groupNet(){
 function simplifyDebts(net){
   const c=[],d=[];
   for(const [n,b] of Object.entries(net)){
-    if(b > 0.5) c.push({name:n,bal:b});
-    else if(b < -0.5) d.push({name:n,bal:-b});
+    if(b>0.5) c.push({name:n,bal:b});
+    else if(b<-0.5) d.push({name:n,bal:-b});
   }
-  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>a.bal-b.bal); // smallest debtor first = matches Splitwise routing
+  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>a.bal-b.bal);
   const cv=c.map(x=>({...x})), dv=d.map(x=>({...x}));
-  const payments=[];
-  let ci=0,di=0;
-  while(ci<cv.length && di<dv.length){
+  const payments=[]; let ci=0,di=0;
+  while(ci<cv.length&&di<dv.length){
     const pay=Math.min(cv[ci].bal,dv[di].bal);
     if(pay>0.5) payments.push({from:dv[di].name,to:cv[ci].name,amount:Math.round(pay)});
     cv[ci].bal-=pay; dv[di].bal-=pay;
-    if(cv[ci].bal<0.5) ci++;
-    if(dv[di].bal<0.5) di++;
+    if(cv[ci].bal<0.5) ci++; if(dv[di].bal<0.5) di++;
   }
   return payments;
 }
-function pairwiseDebts(){
-  // Returns [{from, to, amount}] — bilateral debts without simplification
+function pairwiseDebts(g){
+  g=g||getActiveGroup();
   const add=(debt,a,b,v)=>{
     if(a===b) return;
-    if(!debt[a]) debt[a]={};
-    if(!debt[b]) debt[b]={};
-    debt[a][b]=(debt[a][b]||0)+v;
-    debt[b][a]=(debt[b][a]||0)-v;
+    if(!debt[a]) debt[a]={}; if(!debt[b]) debt[b]={};
+    debt[a][b]=(debt[a][b]||0)+v; debt[b][a]=(debt[b][a]||0)-v;
   };
   const debt={};
-  // Opening pairs
-  (S.settings.group||{}).openingPairs?.forEach(p=>{
+  (g?.openingPairs||[]).forEach(p=>{
     const fk=p.from==='you'?'you':p.from.toLowerCase();
     const tk=p.to==='you'?'you':p.to.toLowerCase();
-    add(debt,fk,tk,p.amount); // fk owes tk
+    add(debt,fk,tk,p.amount);
   });
-  // Group expenses: each share-holder owes payer their share
+  const isFirst=getGroups()[0]===g;
   S.txns.forEach(t=>{
-    if(t.type==='group' && Array.isArray(t.shares)){
+    const belongs=(t.groupId&&t.groupId===g?.id)||(isFirst&&!t.groupId);
+    if(!belongs) return;
+    if(t.type==='group'&&Array.isArray(t.shares)){
       const pk=t.payer==='you'?'you':t.payer.toLowerCase();
       t.shares.forEach(s=>{
         const sk=s.name==='you'?'you':s.name.toLowerCase();
@@ -617,15 +656,14 @@ function pairwiseDebts(){
     if(t.type==='group-settle'){
       const fk=t.from==='you'?'you':t.from.toLowerCase();
       const tk=t.to==='you'?'you':t.to.toLowerCase();
-      add(debt,fk,tk,-t.amount); // payment reduces fk's debt to tk
+      add(debt,fk,tk,-t.amount);
     }
   });
-  const all=gMembers(), seen=new Set(), result=[];
+  const all=gMembers(g), seen=new Set(), result=[];
   all.forEach(a=>all.forEach(b=>{
     if(a===b) return;
     const key=[a,b].sort().join('→');
-    if(seen.has(key)) return;
-    seen.add(key);
+    if(seen.has(key)) return; seen.add(key);
     const v=(debt[a]&&debt[a][b])||0;
     if(v>0.5) result.push({from:a,to:b,amount:Math.round(v*100)/100});
     else if(v<-0.5) result.push({from:b,to:a,amount:Math.round(-v*100)/100});
@@ -633,29 +671,37 @@ function pairwiseDebts(){
   return result;
 }
 async function logSettle(from,to,amount){
-  const v=prompt(`Log: ${dispName(from)} pays ${dispName(to)}\nAmount (₹):`,amount);
+  const g=getActiveGroup();
+  const v=prompt(`Log: ${dispName(from,g)} pays ${dispName(to,g)}\nAmount (₹):`,amount);
   if(v===null) return;
   const amt=parseFloat(v);
   if(isNaN(amt)||amt<=0) return;
-  S.txns.push({id:Date.now(),type:'group-settle',amount:amt,date:new Date().toISOString().slice(0,10),desc:`${dispName(from)} → ${dispName(to)}`,from,to});
+  S.txns.push({id:Date.now(),type:'group-settle',groupId:g?.id,amount:amt,date:new Date().toISOString().slice(0,10),desc:`${dispName(from,g)} → ${dispName(to,g)}`,from,to});
   await setJSON('ledger:txns',S.txns);
-  await markEdit(); scheduleSync();
-  render();
+  await markEdit(); scheduleSync(); render();
 }
 function renderGroup(){
-  const g=S.settings.group;
-  const hint=document.getElementById('groupNameHint');
-  if(hint) hint.textContent=g&&g.name?('· '+g.name):'';
+  const groups=getGroups();
+  const tabsCont=document.getElementById('groupTabs');
+  if(tabsCont){
+    const ag=getActiveGroup();
+    tabsCont.innerHTML=groups.map(g=>`<div class="gtab${g===ag?' on':''}" onclick="switchGroup('${g.id}')">${g.name||'Unnamed'}</div>`).join('');
+    tabsCont.style.display=groups.length?'flex':'none';
+  }
+  const g=getActiveGroup();
   const content=document.getElementById('groupContent');
   if(!content) return;
+  // simplify toggle button
+  const useSimplify=S.settings.simplifyDebts!==false;
+  const btn=document.getElementById('simplifyToggleBtn');
+  if(btn){ btn.textContent=useSimplify?'Simplify: ON':'Simplify: OFF'; btn.style.borderColor=useSimplify?'var(--green)':'var(--line)'; btn.style.color=useSimplify?'var(--green)':'var(--muted)'; }
   if(!g||!g.members||!g.members.length){
-    content.innerHTML='<div class="empty">Set up your group above to track shared balances and simplify debts.</div>';
+    content.innerHTML='<div class="empty">Create a group above to track shared balances and simplify debts.</div>';
     return;
   }
-  const net=groupNet();
-  let html='';
+  const net=groupNet(g); let html='';
   Object.entries(net).forEach(([m,v])=>{
-    const name=dispName(m);
+    const name=dispName(m,g);
     if(Math.abs(v)<0.5)
       html+=`<div class="gbal"><div><div class="gname">${name}</div><div class="gst">settled</div></div><div class="gamt" style="color:var(--faint)">₹0</div></div>`;
     else if(v>0)
@@ -663,50 +709,57 @@ function renderGroup(){
     else
       html+=`<div class="gbal"><div><div class="gname">${name}</div><div class="gst">owes</div></div><div class="gamt neg">${fmt(-v)}</div></div>`;
   });
-  const useSimplify = S.settings.simplifyDebts !== false;
-  const btn = document.getElementById('simplifyToggleBtn');
-  if(btn){ btn.textContent = useSimplify ? 'Simplify: ON' : 'Simplify: OFF'; btn.style.borderColor = useSimplify ? 'var(--green)' : 'var(--line)'; btn.style.color = useSimplify ? 'var(--green)' : 'var(--muted)'; }
   if(useSimplify){
-    const payments = simplifyDebts(net);
+    const payments=simplifyDebts(net);
     if(payments.length){
       html+=`<div class="settle-list"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">Simplified — settle in ${payments.length} payment${payments.length>1?'s':''}</div>`;
-      payments.forEach(p=>{
-        html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`;
-      });
+      payments.forEach(p=>{ html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from,g)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to,g)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`; });
       html+='</div>';
-    } else {
-      html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
-    }
+    } else { html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>'; }
   } else {
-    const pairs = pairwiseDebts();
+    const pairs=pairwiseDebts(g);
     if(pairs.length){
       html+=`<div class="settle-list"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">All debts (unsimplified)</div>`;
-      pairs.forEach(p=>{
-        html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`;
-      });
+      pairs.forEach(p=>{ html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from,g)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to,g)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`; });
       html+='</div>';
-    } else {
-      html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
-    }
+    } else { html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>'; }
   }
   content.innerHTML=html;
 }
-function populateGroupSelects(){
-  const members=gMembers();
-  if(!members.length) return;
-  const opts=members.map(m=>`<option value="${m}">${dispName(m)}</option>`).join('');
-  ['groupPayer','settleFrom','settleTo'].forEach(id=>{
-    const el=document.getElementById(id);
-    if(el) el.innerHTML=opts;
+function populateGroupSelects(g){
+  g=g||getActiveGroup();
+  const members=gMembers(g);
+  const opts=members.map(m=>`<option value="${m}">${dispName(m,g)}</option>`).join('');
+  ['groupPayer','settleFrom','settleTo'].forEach(id=>{ const el=document.getElementById(id); if(el) el.innerHTML=opts; });
+  // group selector dropdowns (shown when 2+ groups)
+  const groups=getGroups();
+  const gOpts=groups.map(gr=>`<option value="${gr.id}">${gr.name||'Unnamed'}</option>`).join('');
+  const ag=getActiveGroup();
+  ['groupSelector','settleSelector'].forEach(id=>{
+    const el=document.getElementById(id); if(!el) return;
+    el.innerHTML=gOpts; if(ag) el.value=ag.id;
   });
-  renderGroupShares();
+  const showSel=groups.length>1;
+  const gsr=document.getElementById('groupSelectorRow'); if(gsr) gsr.classList.toggle('hidden',!showSel);
+  const ssr=document.getElementById('settleSelectorRow'); if(ssr) ssr.classList.toggle('hidden',!showSel);
+  renderGroupShares(g);
 }
-function renderGroupShares(){
-  const members=gMembers();
+function onGroupSelectorChange(){
+  const id=document.getElementById('groupSelector').value;
+  const g=getGroups().find(gr=>gr.id===id);
+  if(g){ populateGroupSelects(g); }
+}
+function onSettleSelectorChange(){
+  const id=document.getElementById('settleSelector').value;
+  const g=getGroups().find(gr=>gr.id===id);
+  if(g){ populateGroupSelects(g); }
+}
+function renderGroupShares(g){
+  g=g||getActiveGroup();
+  const members=gMembers(g);
   if(!members.length) return;
-  const c=document.getElementById('groupShares');
-  if(!c) return;
-  c.innerHTML=members.map(m=>`<div class="gs-row"><div class="gs-name">${dispName(m)}</div><input class="gs-input gs-share" data-member="${m}" type="number" inputmode="decimal" placeholder="0"></div>`).join('');
+  const c=document.getElementById('groupShares'); if(!c) return;
+  c.innerHTML=members.map(m=>`<div class="gs-row"><div class="gs-name">${dispName(m,g)}</div><input class="gs-input gs-share" data-member="${m}" type="number" inputmode="decimal" placeholder="0"></div>`).join('');
 }
 function groupEqualSplit(){
   const amt=parseFloat(document.getElementById('amount').value)||0;
@@ -721,14 +774,13 @@ function refreshOpeningRows(){
   const raw=document.getElementById('groupMembersInput').value||'';
   const others=raw.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
   window._pairMembers=['you',...others];
-  const g=S.settings.group||{};
+  const g=window._editingGroup||{};
   const prev=g.openingPairs||[];
   const cont=document.getElementById('openingRows');
   cont.innerHTML='<div id="pairRows"></div><button type="button" onclick="addPairRow()" style="font-size:12px;background:none;border:1px dashed var(--line);color:var(--muted);border-radius:8px;padding:5px 12px;cursor:pointer;margin-top:4px;font-family:inherit">+ Add debt</button>';
   const pr=document.getElementById('pairRows');
   if(prev.length) prev.forEach(p=>pr.appendChild(makePairRow(p)));
   else pr.appendChild(makePairRow({}));
-  // populate net helper rows
   const nr=document.getElementById('netGenRows');
   if(nr){
     const inStyle='background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font-size:13px;font-family:"JetBrains Mono",monospace;width:110px';
@@ -738,27 +790,21 @@ function refreshOpeningRows(){
 function genPairsFromNet(){
   const vals={};
   document.querySelectorAll('.ng-val').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)&&v!==0) vals[i.dataset.member]=v; });
-  // greedy decomposition (smallest debtor first, matches simplify algo)
   const c=[],d=[];
   for(const [n,b] of Object.entries(vals)){
-    if(b>0.5) c.push({name:n,bal:b});
-    else if(b<-0.5) d.push({name:n,bal:b});
+    if(b>0.5) c.push({name:n,bal:b}); else if(b<-0.5) d.push({name:n,bal:b});
   }
-  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>a.bal-b.bal); // smallest debtor (most negative) last
-  const pairs=[];
-  let ci=0,di=0;
+  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>a.bal-b.bal);
+  const pairs=[]; let ci=0,di=0;
   while(ci<c.length&&di<d.length){
     const cr=c[ci],db=d[di];
     const amt=Math.min(cr.bal,-db.bal);
     if(amt>0.5) pairs.push({from:db.name,to:cr.name,amount:Math.round(amt*100)/100});
     cr.bal-=amt; db.bal+=amt;
-    if(Math.abs(cr.bal)<0.5) ci++;
-    if(Math.abs(db.bal)<0.5) di++;
+    if(Math.abs(cr.bal)<0.5) ci++; if(Math.abs(db.bal)<0.5) di++;
   }
   if(!pairs.length){ alert('No valid debts found. Check your net values.'); return; }
-  // populate pair rows
-  const pr=document.getElementById('pairRows');
-  pr.innerHTML='';
+  const pr=document.getElementById('pairRows'); pr.innerHTML='';
   pairs.forEach(p=>pr.appendChild(makePairRow(p)));
 }
 function makePairRow(p){
@@ -774,13 +820,17 @@ function makePairRow(p){
   return div;
 }
 function addPairRow(){ document.getElementById('pairRows').appendChild(makePairRow({})); }
-async function setupGroup(){
-  const panel=document.getElementById('groupSetupPanel');
-  const g=S.settings.group||{};
+function setupGroup(id){
+  // id = existing group id to edit; null/undefined = new group
+  const isNew=!id;
+  const g=isNew?{}:(getGroups().find(gr=>gr.id===id)||{});
+  window._editingGroup=g;
+  document.getElementById('setupPanelTitle').textContent=isNew?'New group':'Edit group';
+  document.getElementById('deleteGroupBtn').style.display=isNew?'none':'';
   document.getElementById('groupNameInput').value=g.name||'';
   document.getElementById('groupMembersInput').value=(g.members||[]).join(', ');
   refreshOpeningRows();
-  panel.classList.toggle('hidden');
+  document.getElementById('groupSetupPanel').classList.remove('hidden');
 }
 async function saveGroup(){
   const name=(document.getElementById('groupNameInput').value||'').trim();
@@ -793,8 +843,17 @@ async function saveGroup(){
     const amount=parseFloat(row.querySelector('.pr-amt').value);
     if(from&&to&&from!==to&&!isNaN(amount)&&amount>0) openingPairs.push({from,to,amount});
   });
-  const prev=S.settings.group||{};
-  S.settings.group={name,members,startDate:prev.startDate||new Date().toISOString().slice(0,10),openingPairs};
+  const editing=window._editingGroup;
+  if(editing&&editing.id){
+    // Edit existing
+    const idx=S.settings.groups.findIndex(g=>g.id===editing.id);
+    if(idx>=0) S.settings.groups[idx]={...S.settings.groups[idx],name,members,openingPairs};
+  } else {
+    // New group
+    const id='grp_'+Date.now();
+    S.settings.groups.push({id,name,members,startDate:new Date().toISOString().slice(0,10),openingPairs});
+    S.settings.activeGroupId=id;
+  }
   await setJSON('ledger:settings',S.settings);
   await markEdit(); scheduleSync();
   document.getElementById('groupSetupPanel').classList.add('hidden');
@@ -1014,6 +1073,10 @@ async function add(){
     t.yourShare=0; t.category='Cashback';
   } else if(S.type==='group'){
     t.yourShare=0; t.cp=false;
+    // determine which group this expense belongs to
+    const gSel=document.getElementById('groupSelector');
+    const gid=gSel&&gSel.offsetParent?gSel.value:(getActiveGroup()?.id);
+    t.groupId=gid;
     t.payer=document.getElementById('groupPayer').value;
     const shares=[...document.querySelectorAll('.gs-share')].map(i=>({name:i.dataset.member,share:parseFloat(i.value)||0})).filter(s=>s.share>0);
     if(!shares.length){ alert('Enter at least one share.'); return; }
@@ -1021,6 +1084,9 @@ async function add(){
     if(Math.abs(tot-amount)>1 && !confirm(`Shares total ${fmt(tot)}, amount is ${fmt(amount)}. Add anyway?`)) return;
     t.shares=shares; t.amount=tot;
   } else if(S.type==='group-settle'){
+    const ssSel=document.getElementById('settleSelector');
+    const ssid=ssSel&&ssSel.offsetParent?ssSel.value:(getActiveGroup()?.id);
+    t.groupId=ssid;
     const from=document.getElementById('settleFrom').value;
     const to=document.getElementById('settleTo').value;
     if(from===to){ alert('From and To must be different.'); return; }
@@ -1194,9 +1260,21 @@ async function init(){
     await setJSON('ledger:settings',S.settings);
     renderGroup();
   };
-  document.getElementById('setupGroupBtn').onclick=setupGroup;
+  document.getElementById('setupGroupBtn').onclick=()=>setupGroup(getActiveGroup()?.id);
+  document.getElementById('newGroupBtn').onclick=()=>setupGroup(null);
   document.getElementById('saveGroupBtn').onclick=saveGroup;
   document.getElementById('cancelGroupBtn').onclick=()=>document.getElementById('groupSetupPanel').classList.add('hidden');
+  document.getElementById('deleteGroupBtn').onclick=async()=>{
+    const g=window._editingGroup;
+    if(!g||!g.id) return;
+    if(!confirm(`Delete group "${g.name||'Unnamed'}"? Its transactions will be unlinked but not deleted.`)) return;
+    S.settings.groups=S.settings.groups.filter(gr=>gr.id!==g.id);
+    if(S.settings.activeGroupId===g.id) S.settings.activeGroupId=(S.settings.groups[0]||{}).id||null;
+    await setJSON('ledger:settings',S.settings);
+    await markEdit(); scheduleSync();
+    document.getElementById('groupSetupPanel').classList.add('hidden');
+    populateGroupSelects(); renderGroup();
+  };
   document.getElementById('groupEq').onclick=groupEqualSplit;
   populateGroupSelects();
   // sync
