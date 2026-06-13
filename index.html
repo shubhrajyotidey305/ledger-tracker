@@ -143,6 +143,7 @@
         <div class="t" data-type="repay">Repay</div>
         <div class="t" data-type="transfer">Transfer</div>
         <div class="t" data-type="cashback">Cashback</div>
+        <div class="t" data-type="opening">Opening</div>
       </div>
 
       <div class="row">
@@ -206,6 +207,20 @@
         <div class="row">
           <div class="f"><label>Person</label><input id="cpPerson" placeholder="e.g. Raj"></div>
           <div class="f" id="dirF"><label>Direction</label><select id="dir"><option value="in">They paid you back</option><option value="out">You paid them back</option></select></div>
+        </div>
+      </div>
+
+      <!-- opening balance -->
+      <div id="openingBlock" class="hidden">
+        <div class="row">
+          <div class="f"><label>Person</label><input id="cpOpening" placeholder="e.g. Sahil"></div>
+          <div class="f"><label>Who owes whom?</label><select id="openingDir">
+            <option value="owe">They owe you (you lent them)</option>
+            <option value="debt">You owe them (they lent you)</option>
+          </select></div>
+        </div>
+        <div style="font-size:11.5px;color:var(--faint);margin:-4px 0 8px;line-height:1.5">
+          Use this for pre-existing balances from Splitwise or any other source before you started tracking here.
         </div>
       </div>
 
@@ -329,7 +344,9 @@ function personDeltaMap(t){ // {name: delta}; + = they owe you more
   const put=(n,v)=>{ if(n&&v) m[n]=(m[n]||0)+v; };
   const hasSplits = Array.isArray(t.splits) && t.splits.length>0;
   const each=sign=>t.splits.forEach(s=>put(s.name,sign*(+s.share||0)));
-  if(t.type==='lend'){
+  if(t.type==='opening'){
+    put(t.cpName, t.dir==='owe' ? t.amount : -t.amount);
+  } else if(t.type==='lend'){
     hasSplits ? each(1) : put(t.cpName, t.amount);
   } else if(t.type==='repay'){
     const sign = t.dir==='in' ? -1 : 1;
@@ -479,7 +496,7 @@ function render(){
   // txns
   const recent = [...S.txns].sort((a,b)=> b.date.localeCompare(a.date) || b.id-a.id).slice(0,40);
   document.getElementById('txns').innerHTML = recent.length ? recent.map(t=>{
-    const sign = (t.type==='income'||t.type==='cashback'||(t.type==='repay'&&t.dir==='in')) ? '+' : (t.type==='transfer'?'~':'-');
+    const sign = (t.type==='income'||t.type==='cashback'||(t.type==='repay'&&t.dir==='in')||(t.type==='opening'&&t.dir==='owe')) ? '+' : (t.type==='transfer'||t.type==='opening'?'~':'-');
     const cls = sign==='+'?'pos':(sign==='~'?'':'');
     const spreadTag = t.spreadDays>1 ? ('· \u00f7'+t.spreadDays+'d') : (t.spread>1?('· \u00f7'+t.spread+'mo'):'');
     const srcTag = t.type==='expense' ? (srcOf(t)==='card'?'· card':(srcOf(t)==='wallet'?'· wallet':'')) : '';
@@ -515,14 +532,15 @@ async function openCardPay(){
 function setType(type){
   S.type=type;
   document.querySelectorAll('.types .t').forEach(t=>t.classList.toggle('on',t.dataset.type===type));
-  const isExp=type==='expense', isPerson=(type==='lend'||type==='repay');
+  const isExp=type==='expense', isPerson=(type==='lend'||type==='repay'), isOpening=type==='opening';
   document.getElementById('catF').style.display = isExp ? '' : 'none';
   document.getElementById('spreadRow').style.display = isExp ? '' : 'none';
   document.getElementById('cashbackRow').style.display = isExp ? '' : 'none';
   document.getElementById('splitBlock').classList.toggle('hidden', !isExp);
   document.getElementById('personBlock').classList.toggle('hidden', !isPerson);
+  document.getElementById('openingBlock').classList.toggle('hidden', !isOpening);
   document.getElementById('dirF').style.display = type==='repay' ? '' : 'none';
-  document.getElementById('addBtn').textContent = 'Add '+type;
+  document.getElementById('addBtn').textContent = isOpening ? 'Set opening balance' : ('Add '+type);
 }
 
 /* split rows (one per person) */
@@ -611,13 +629,18 @@ async function add(){
     t.yourShare=0; t.category='Transfer';
   } else if(S.type==='cashback'){
     t.yourShare=0; t.category='Cashback';
+  } else if(S.type==='opening'){
+    t.yourShare=0; t.cp=true;
+    t.cpName=document.getElementById('cpOpening').value.trim();
+    t.dir=document.getElementById('openingDir').value;
+    if(!t.cpName){ document.getElementById('cpOpening').focus(); return; }
   }
 
   S.txns.push(t);
   await setJSON('ledger:txns', S.txns);
   await markEdit(); scheduleSync();
   // reset
-  ['amount','desc','yourShare','cpExp','cpPerson','cashbackAmt'].forEach(id=>document.getElementById(id).value='');
+  ['amount','desc','yourShare','cpExp','cpPerson','cpOpening','cashbackAmt'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('spread').value='m1';
   document.getElementById('paySrc').value='bank';
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
