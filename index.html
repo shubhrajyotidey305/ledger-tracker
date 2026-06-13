@@ -292,7 +292,7 @@
     <div id="groupSetupPanel" class="hidden" style="margin-bottom:14px;padding:13px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)">
       <div class="row"><div class="f"><label>Group name (optional)</label><input id="groupNameInput" placeholder="e.g. A-144 Noida"></div></div>
       <div class="f" style="margin-bottom:12px"><label>Members — comma-separated, not including you</label><input id="groupMembersInput" placeholder="e.g. Sahil, Vipin, Devoneel" oninput="refreshOpeningRows()"></div>
-      <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Starting balances <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-size:11px">— from Splitwise "Group balances" screen. Positive = they're owed money (creditor), negative = they owe money (debtor). You are included.</span></div>
+      <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Opening debts <span style="text-transform:none;letter-spacing:0;color:var(--faint);font-size:11px">— enter each pairwise debt from Splitwise (e.g. "You owes Sahil ₹6369"). One row per debt.</span></div>
       <div id="openingRows"></div>
       <div style="display:flex;gap:8px;margin-top:10px"><button class="add" id="saveGroupBtn" style="margin:0;max-width:160px">Save group</button><button class="btn" id="cancelGroupBtn">Cancel</button></div>
     </div>
@@ -521,7 +521,17 @@ function dispName(key){ // lowercase key → display name
 function groupNet(){
   const net={};
   gMembers().forEach(m=>net[m]=0);
-  // Seed from group starting balances (set in setup, sourced from Splitwise)
+  // Seed from pairwise opening debts (new format)
+  const pairs=(S.settings.group||{}).openingPairs||[];
+  pairs.forEach(p=>{
+    const fk=p.from==='you'?'you':p.from.toLowerCase();
+    const tk=p.to==='you'?'you':p.to.toLowerCase();
+    if(!(fk in net)) net[fk]=0;
+    if(!(tk in net)) net[tk]=0;
+    net[fk]-=p.amount; // debtor
+    net[tk]+=p.amount; // creditor
+  });
+  // Backward compat: also process old net-per-person opening format
   const op=(S.settings.group||{}).opening||{};
   for(const [k,v] of Object.entries(op)){
     const key=k==='you'?'you':k.toLowerCase();
@@ -571,6 +581,49 @@ function simplifyDebts(net){
   }
   return payments;
 }
+function pairwiseDebts(){
+  // Returns [{from, to, amount}] — bilateral debts without simplification
+  const add=(debt,a,b,v)=>{
+    if(a===b) return;
+    if(!debt[a]) debt[a]={};
+    if(!debt[b]) debt[b]={};
+    debt[a][b]=(debt[a][b]||0)+v;
+    debt[b][a]=(debt[b][a]||0)-v;
+  };
+  const debt={};
+  // Opening pairs
+  (S.settings.group||{}).openingPairs?.forEach(p=>{
+    const fk=p.from==='you'?'you':p.from.toLowerCase();
+    const tk=p.to==='you'?'you':p.to.toLowerCase();
+    add(debt,fk,tk,p.amount); // fk owes tk
+  });
+  // Group expenses: each share-holder owes payer their share
+  S.txns.forEach(t=>{
+    if(t.type==='group' && Array.isArray(t.shares)){
+      const pk=t.payer==='you'?'you':t.payer.toLowerCase();
+      t.shares.forEach(s=>{
+        const sk=s.name==='you'?'you':s.name.toLowerCase();
+        if(sk!==pk) add(debt,sk,pk,+(s.share||0));
+      });
+    }
+    if(t.type==='group-settle'){
+      const fk=t.from==='you'?'you':t.from.toLowerCase();
+      const tk=t.to==='you'?'you':t.to.toLowerCase();
+      add(debt,fk,tk,-t.amount); // payment reduces fk's debt to tk
+    }
+  });
+  const all=gMembers(), seen=new Set(), result=[];
+  all.forEach(a=>all.forEach(b=>{
+    if(a===b) return;
+    const key=[a,b].sort().join('→');
+    if(seen.has(key)) return;
+    seen.add(key);
+    const v=(debt[a]&&debt[a][b])||0;
+    if(v>0.5) result.push({from:a,to:b,amount:Math.round(v*100)/100});
+    else if(v<-0.5) result.push({from:b,to:a,amount:Math.round(-v*100)/100});
+  }));
+  return result;
+}
 async function logSettle(from,to,amount){
   const v=prompt(`Log: ${dispName(from)} pays ${dispName(to)}\nAmount (₹):`,amount);
   if(v===null) return;
@@ -616,6 +669,17 @@ function renderGroup(){
     } else {
       html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
     }
+  } else {
+    const pairs = pairwiseDebts();
+    if(pairs.length){
+      html+=`<div class="settle-list"><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px">All debts (unsimplified)</div>`;
+      pairs.forEach(p=>{
+        html+=`<div class="settle-item"><div class="settle-names"><b>${dispName(p.from)}</b><span class="settle-arrow"> → </span><b>${dispName(p.to)}</b></div><div style="font-family:'JetBrains Mono',monospace;font-weight:500;color:var(--amber);margin-right:8px">${fmt(p.amount)}</div><button class="settle-log" onclick="logSettle('${p.from}','${p.to}',${p.amount})">Log payment</button></div>`;
+      });
+      html+='</div>';
+    } else {
+      html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>';
+    }
   }
   content.innerHTML=html;
 }
@@ -647,16 +711,29 @@ function groupEqualSplit(){
 }
 function refreshOpeningRows(){
   const raw=document.getElementById('groupMembersInput').value;
-  const members=['you',...raw.split(/[,;]+/).map(s=>s.trim()).filter(Boolean)];
+  const others=raw.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
+  window._pairMembers=['you',...others];
   const g=S.settings.group||{};
-  const prev=g.opening||{};
-  const inStyle='background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:7px 10px;font-size:13px;font-family:"JetBrains Mono",monospace;width:100%;box-sizing:border-box';
-  document.getElementById('openingRows').innerHTML=members.map(m=>{
-    const key=m==='you'?'you':m.toLowerCase();
-    const val=prev[key]!==undefined?prev[key]:'';
-    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px"><div style="width:90px;font-size:13px;color:var(--text);flex-shrink:0">${m==='you'?'You':m}</div><input class="op-bal" data-member="${key}" type="number" inputmode="decimal" placeholder="e.g. 9273 or -6369" value="${val}" style="${inStyle}"></div>`;
-  }).join('');
+  const prev=g.openingPairs||[];
+  const cont=document.getElementById('openingRows');
+  cont.innerHTML='<div id="pairRows"></div><button type="button" onclick="addPairRow()" style="font-size:12px;background:none;border:1px dashed var(--line);color:var(--muted);border-radius:8px;padding:5px 12px;cursor:pointer;margin-top:4px;font-family:inherit">+ Add debt</button>';
+  const pr=document.getElementById('pairRows');
+  if(prev.length) prev.forEach(p=>pr.appendChild(makePairRow(p)));
+  else pr.appendChild(makePairRow({}));
 }
+function makePairRow(p){
+  const sel=()=>{const s=document.createElement('select');s.style.cssText='background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font-size:13px;font-family:inherit';s.innerHTML=(window._pairMembers||[]).map(m=>`<option value="${m==='you'?'you':m.toLowerCase()}">${m==='you'?'You':m}</option>`).join('');return s;};
+  const sp=t=>{const s=document.createElement('span');s.textContent=t;s.style.cssText='color:var(--faint);font-size:12px;flex-shrink:0';return s;};
+  const div=document.createElement('div');div.className='pair-row';div.style.cssText='display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap';
+  const fr=sel(); if(p.from) fr.value=p.from;
+  const to=sel(); const ms=window._pairMembers||[]; if(p.to) to.value=p.to; else if(ms.length>1) to.value=ms[1]==='you'?'you':ms[1].toLowerCase();
+  const amt=document.createElement('input');amt.className='pr-amt';amt.type='number';amt.inputMode='decimal';amt.placeholder='₹ amount';amt.value=p.amount||'';amt.style.cssText='background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 8px;font-size:13px;font-family:"JetBrains Mono",monospace;width:100px';
+  const rem=document.createElement('button');rem.type='button';rem.textContent='×';rem.style.cssText='background:none;border:none;color:var(--faint);cursor:pointer;font-size:18px;padding:0 4px;line-height:1';rem.onclick=()=>div.remove();
+  fr.className='pr-from'; to.className='pr-to';
+  div.append(fr,sp('owes'),to,amt,rem);
+  return div;
+}
+function addPairRow(){ document.getElementById('pairRows').appendChild(makePairRow({})); }
 async function setupGroup(){
   const panel=document.getElementById('groupSetupPanel');
   const g=S.settings.group||{};
@@ -669,9 +746,15 @@ async function saveGroup(){
   const name=(document.getElementById('groupNameInput').value||'').trim();
   const members=document.getElementById('groupMembersInput').value.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
   if(!members.length){ alert('Add at least one member.'); return; }
-  const opening={};
-  document.querySelectorAll('.op-bal').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)) opening[i.dataset.member]=v; });
-  S.settings.group={name,members,startDate:new Date().toISOString().slice(0,10),opening};
+  const openingPairs=[];
+  document.querySelectorAll('.pair-row').forEach(row=>{
+    const from=row.querySelector('.pr-from').value;
+    const to=row.querySelector('.pr-to').value;
+    const amount=parseFloat(row.querySelector('.pr-amt').value);
+    if(from&&to&&from!==to&&!isNaN(amount)&&amount>0) openingPairs.push({from,to,amount});
+  });
+  const prev=S.settings.group||{};
+  S.settings.group={name,members,startDate:prev.startDate||new Date().toISOString().slice(0,10),openingPairs};
   await setJSON('ledger:settings',S.settings);
   await markEdit(); scheduleSync();
   document.getElementById('groupSetupPanel').classList.add('hidden');
