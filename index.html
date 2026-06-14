@@ -365,7 +365,7 @@ async function load(){
   await migrateToMultiGroup();
 }
 
-/* ---- cross-device sync (Netlify Blobs via /api/sync) ---- */
+/* ---- cross-device sync (Cloudflare KV via /api/sync) ---- */
 const SYNC = {code:null, busy:false, timer:null};
 function setSyncStatus(s){ const e=document.getElementById('syncStatus'); if(e) e.textContent=s; }
 async function markEdit(){ await rawSet('ledger:lastEdit', String(Date.now())); }
