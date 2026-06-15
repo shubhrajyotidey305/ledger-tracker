@@ -219,6 +219,12 @@
       <div class="row" id="cashbackRow">
         <div class="f"><label>Cashback to wallet <span style="color:var(--faint);font-weight:400">— optional; shared before splitting</span></label><input class="num" id="cashbackAmt" type="number" inputmode="decimal" placeholder="0"></div>
       </div>
+      <div class="row hidden" id="cbCreditRow">
+        <div class="f"><label>Credit to</label><select id="cbCreditTo" onchange="onCbCreditChange()">
+          <option value="wallet">Amazon Pay wallet</option>
+        </select></div>
+        <div class="f hidden" id="cbCardSelRow"><label>Card</label><select id="cbCardSel"></select></div>
+      </div>
       <div class="row">
         <div class="f"><label>Description</label><input id="desc" placeholder="e.g. lunch at office"></div>
         <div class="f" style="max-width:140px"><label>Date</label><input id="date" type="date"></div>
@@ -278,6 +284,14 @@
           <div class="f"><label>Category</label><select id="groupCategory"></select></div>
           <div class="f"><label>Paid by</label><select id="groupPayer"></select></div>
           <div class="f" style="justify-content:flex-end"><button class="btn" type="button" id="groupEq" style="align-self:flex-end">&divide; Equal split</button></div>
+        </div>
+        <div class="row" id="groupPaySrcRow">
+          <div class="f"><label>Paid from <span style="color:var(--faint);font-weight:400">— only matters if you paid</span></label><select id="groupPaySrc" onchange="onGroupPaySrcChange()">
+            <option value="bank">Bank / Cash</option>
+            <option value="card">Credit card</option>
+            <option value="wallet">Amazon Pay wallet</option>
+          </select></div>
+          <div class="f hidden" id="groupCardSelRow"><label>Card</label><select id="groupCardSel"></select></div>
         </div>
         <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Each member's share</div>
         <div id="groupShares"></div>
@@ -500,16 +514,36 @@ function srcOf(t){ return t.src || (t.card ? 'card' : 'bank'); } // back-compat 
 function getCards(){ return S.settings.cards||[]; }
 function cardDeltaFor(t, cardId){
   if(t.type==='cardpay') return (t.cardId||null)===cardId ? -t.amount : 0;
+  if(t.type==='cashback' && t.cardId) return t.cardId===cardId ? -t.amount : 0;
   if(t.type==='expense' && t.paidBy!=='other' && srcOf(t)==='card') return (t.cardId||null)===cardId ? t.amount : 0;
+  if(t.type==='group' && t.payer==='you' && srcOf(t)==='card') return (t.cardId||null)===cardId ? t.amount : 0;
   return 0;
 }
 function fillCardSelects(){
   const cards=getCards();
-  const opts=(cards.length
-    ? cards.map(c=>`<option value="${c}">${c}</option>`)
-    : ['<option value="">No cards — add one above</option>']
-  ).join('');
-  const sel=document.getElementById('cardSel'); if(sel) sel.innerHTML=opts;
+  const cardOpts=cards.map(c=>`<option value="${c}">${c}</option>`).join('');
+  const noCard='<option value="">No cards — add one above</option>';
+  // expense card selector
+  const sel=document.getElementById('cardSel'); if(sel) sel.innerHTML=cards.length?cardOpts:noCard;
+  // group card selector
+  const gcs=document.getElementById('groupCardSel'); if(gcs) gcs.innerHTML=cards.length?cardOpts:noCard;
+  // cashback credit-to selector: wallet + all cards
+  const cbc=document.getElementById('cbCreditTo');
+  if(cbc){ cbc.innerHTML='<option value="wallet">Amazon Pay wallet</option>'+cardOpts; }
+  // cashback card selector
+  const cbcs=document.getElementById('cbCardSel'); if(cbcs) cbcs.innerHTML=cards.length?cardOpts:noCard;
+}
+function onGroupPaySrcChange(){
+  const v=document.getElementById('groupPaySrc').value;
+  const row=document.getElementById('groupCardSelRow');
+  if(row) row.classList.toggle('hidden', v!=='card');
+}
+function onCbCreditChange(){
+  const v=document.getElementById('cbCreditTo').value;
+  const row=document.getElementById('cbCardSelRow');
+  if(row) row.classList.toggle('hidden', v==='wallet');
+  // sync cbCardSel to selected card value
+  if(v!=='wallet'){ const cs=document.getElementById('cbCardSel'); if(cs) cs.value=v; }
 }
 function onPaySrcChange(){
   const v=document.getElementById('paySrc').value;
@@ -581,22 +615,26 @@ function cashDelta(t){
   if(t.type==='repay') return t.dir==='in' ? t.amount : -t.amount;
   if(t.type==='transfer') return -t.amount;
   if(t.type==='cardpay') return -t.amount;
+  if(t.type==='group' && t.payer==='you' && srcOf(t)==='bank') return -t.amount;
   if(t.type==='group-settle') return t.from==='you' ? -t.amount : 0;
   return 0;
 }
 function cardDelta(t){ // + = owe more on card
   if(t.type==='cardpay') return -t.amount;
+  if(t.type==='cashback' && t.cardId) return -t.amount; // cashback credited to card
   if(t.type==='expense' && t.paidBy!=='other' && srcOf(t)==='card') return t.amount;
+  if(t.type==='group' && t.payer==='you' && srcOf(t)==='card') return t.amount;
   return 0;
 }
 function walletDelta(t){ // + = wallet balance up
-  if(t.type==='cashback') return t.amount;
+  if(t.type==='cashback') return t.cardId ? 0 : t.amount; // card cashback doesn't go to wallet
   if(t.type==='expense'){
     let d=0;
-    if(t.cashback && t.paidBy!=='other') d += t.cashback;        // cashback earned
-    if(t.paidBy!=='other' && srcOf(t)==='wallet') d -= t.amount;  // paid from wallet
+    if(t.cashback && t.paidBy!=='other') d += t.cashback;
+    if(t.paidBy!=='other' && srcOf(t)==='wallet') d -= t.amount;
     return d;
   }
+  if(t.type==='group' && t.payer==='you' && srcOf(t)==='wallet') return -t.amount;
   return 0;
 }
 const budgetSpend = t => (t.type==='expense' ? t.yourShare : 0);
@@ -1124,6 +1162,8 @@ function setType(type){
   document.getElementById('catF').style.display = isExp ? '' : 'none';
   document.getElementById('spreadRow').style.display = isExp ? '' : 'none';
   document.getElementById('cashbackRow').style.display = isExp ? '' : 'none';
+  document.getElementById('cbCreditRow').classList.toggle('hidden', type!=='cashback');
+  const gpsr=document.getElementById('groupPaySrcRow'); if(gpsr) gpsr.style.display=isGroup?'':'none';
   document.getElementById('splitBlock').classList.toggle('hidden', !isExp);
   document.getElementById('personBlock').classList.toggle('hidden', !isPerson);
   document.getElementById('openingBlock').classList.toggle('hidden', !isOpening);
@@ -1229,6 +1269,9 @@ function editTx(id){
     document.getElementById('groupCategory').value=t.category||'';
     if(t.groupId){ const gs=document.getElementById('groupSelector'); if(gs){ gs.value=t.groupId; onGroupSelectorChange(); } }
     document.getElementById('groupPayer').value=t.payer||'you';
+    const gps=document.getElementById('groupPaySrc'); if(gps) gps.value=srcOf(t);
+    onGroupPaySrcChange();
+    if(srcOf(t)==='card'&&t.cardId){ const gc=document.getElementById('groupCardSel'); if(gc) gc.value=t.cardId; }
     document.querySelectorAll('.gs-share').forEach(i=>{
       const s=(t.shares||[]).find(x=>x.name===i.dataset.member);
       i.value=s?s.share:'';
@@ -1294,6 +1337,8 @@ async function add(){
     t.yourShare=0; t.category='Transfer';
   } else if(S.type==='cashback'){
     t.yourShare=0; t.category='Cashback';
+    const cbc=document.getElementById('cbCreditTo');
+    if(cbc && cbc.value!=='wallet'){ t.cardId=cbc.value; }
   } else if(S.type==='group'){
     t.yourShare=0; t.cp=false;
     t.category=document.getElementById('groupCategory').value||'Group';
@@ -1303,6 +1348,8 @@ async function add(){
     const gid=(gRow&&!gRow.classList.contains('hidden')&&gSel?.value)?gSel.value:(getActiveGroup()?.id);
     t.groupId=gid;
     t.payer=document.getElementById('groupPayer').value;
+    t.src=document.getElementById('groupPaySrc').value||'bank';
+    if(t.src==='card'){ const gc=document.getElementById('groupCardSel'); t.cardId=gc&&gc.value?gc.value:null; }
     const shares=[...document.querySelectorAll('.gs-share')].map(i=>({name:i.dataset.member,share:parseFloat(i.value)||0})).filter(s=>s.share>0);
     if(!shares.length){ alert('Enter at least one share.'); return; }
     const tot=shares.reduce((s,x)=>s+x.share,0);
@@ -1343,6 +1390,10 @@ async function add(){
   document.getElementById('spread').value='m1';
   document.getElementById('paySrc').value='bank';
   document.getElementById('cardSelRow').classList.add('hidden');
+  document.getElementById('groupPaySrc').value='bank';
+  document.getElementById('groupCardSelRow').classList.add('hidden');
+  const cbc=document.getElementById('cbCreditTo'); if(cbc) cbc.value='wallet';
+  document.getElementById('cbCardSelRow').classList.add('hidden');
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
   document.getElementById('splitFields').classList.add('hidden');
   document.getElementById('splitRows').innerHTML='';
