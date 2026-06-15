@@ -117,6 +117,14 @@
   .gtab{padding:5px 13px;font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;cursor:pointer;color:var(--muted);font-weight:500;transition:.15s}
   .gtab:hover{border-color:var(--amber-soft);color:var(--text)}
   .gtab.on{background:var(--amber);border-color:var(--amber);color:#1a1407;font-weight:700}
+  .card-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px}
+  .card-row:last-child{border:none}
+  .card-name{font-weight:500;color:var(--text);flex:1;font-family:'JetBrains Mono',monospace;font-size:13px;letter-spacing:.3px}
+  .card-bal{font-family:'JetBrains Mono',monospace;font-weight:500;margin-right:6px;min-width:80px;text-align:right}
+  .card-pay-btn{font-size:11.5px;background:var(--panel-2);border:1px solid var(--amber-soft);color:var(--amber);border-radius:8px;padding:4px 10px;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .card-pay-btn:hover{background:var(--amber);color:#1a1407}
+  .card-del{color:var(--faint);cursor:pointer;font-size:15px;padding:0 4px;background:none;border:none}
+  .card-del:hover{color:var(--clay)}
   @media(max-width:680px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
 </style>
 
@@ -154,6 +162,16 @@
     <div class="stat"><div class="k">Amazon Pay</div><div class="v num" id="sWallet">&mdash;</div><small>wallet balance</small></div>
   </div>
 
+  <!-- CARDS SECTION -->
+  <div class="card" id="cardsSection" style="margin-bottom:14px">
+    <h2>Credit Cards
+      <span style="display:flex;gap:8px;align-items:center">
+        <button class="btn" id="addCardBtn">+ Add card</button>
+      </span>
+    </h2>
+    <div id="cardsContent"><div class="empty">No cards added yet — click "+ Add card" to track card balances.</div></div>
+  </div>
+
   <div class="grid">
     <!-- ENTRY -->
     <div class="card">
@@ -175,11 +193,12 @@
         <div class="f" id="catF"><label>Category</label><select id="category"></select></div>
       </div>
       <div class="row" id="spreadRow">
-        <div class="f"><label>Paid from</label><select id="paySrc">
+        <div class="f"><label>Paid from</label><select id="paySrc" onchange="onPaySrcChange()">
           <option value="bank">Bank / Cash</option>
           <option value="card">Credit card</option>
           <option value="wallet">Amazon Pay wallet</option>
         </select></div>
+        <div class="f hidden" id="cardSelRow"><label>Card</label><select id="cardSel"></select></div>
         <div class="f"><label>Spread cost over <span style="color:var(--faint);font-weight:400">— for non-monthly bills</span></label><select id="spread">
           <option value="m1">This month — one-off</option>
           <optgroup label="Calendar months">
@@ -470,6 +489,82 @@ async function migrateSplits(){
   await setJSON('ledger:txns', S.txns);
 }
 function srcOf(t){ return t.src || (t.card ? 'card' : 'bank'); } // back-compat with old card flag
+
+/* ---- card management ---- */
+function getCards(){ return S.settings.cards||[]; }
+function cardDeltaFor(t, cardId){
+  if(t.type==='cardpay') return (t.cardId||null)===cardId ? -t.amount : 0;
+  if(t.type==='expense' && t.paidBy!=='other' && srcOf(t)==='card') return (t.cardId||null)===cardId ? t.amount : 0;
+  return 0;
+}
+function fillCardSelects(){
+  const cards=getCards();
+  const opts=(cards.length
+    ? cards.map(c=>`<option value="${c}">${c}</option>`)
+    : ['<option value="">No cards — add one above</option>']
+  ).join('');
+  const sel=document.getElementById('cardSel'); if(sel) sel.innerHTML=opts;
+}
+function onPaySrcChange(){
+  const v=document.getElementById('paySrc').value;
+  const row=document.getElementById('cardSelRow');
+  if(row) row.classList.toggle('hidden', v!=='card');
+}
+async function addCard(){
+  const v=(prompt('Card name (format: BANKNAME-XXXX, e.g. ICICI-7334 or AXIS-8456):')||'').trim().toUpperCase();
+  if(!v) return;
+  if(!/^[A-Z0-9]+-[0-9]{4}$/.test(v)){ alert('Format must be BANKNAME-XXXX (4 digits). Example: ICICI-7334'); return; }
+  const cards=getCards();
+  if(cards.includes(v)){ alert('Card already added.'); return; }
+  S.settings.cards=[...cards, v];
+  await setJSON('ledger:settings', S.settings);
+  await markEdit(); scheduleSync();
+  fillCardSelects(); renderCardsSection();
+}
+async function removeCard(name){
+  if(!confirm(`Remove card "${name}"?\nPast transactions tagged to this card stay intact.`)) return;
+  S.settings.cards=getCards().filter(c=>c!==name);
+  await setJSON('ledger:settings', S.settings);
+  await markEdit(); scheduleSync();
+  fillCardSelects(); renderCardsSection();
+}
+async function payCardBill(cardId){
+  const owed=S.txns.reduce((s,t)=>s+cardDeltaFor(t,cardId),0);
+  const label=cardId||'card';
+  const v=prompt(`Pay bill for ${label} from bank (₹):`, Math.max(0,Math.round(owed)));
+  if(v===null) return;
+  const amt=parseFloat(v); if(isNaN(amt)||amt<=0) return;
+  S.txns.push({id:Date.now(), type:'cardpay', cardId, amount:amt,
+    date:new Date().toISOString().slice(0,10),
+    desc:`${label} bill payment`, yourShare:0, cp:false, cpName:''});
+  await setJSON('ledger:txns', S.txns);
+  await markEdit(); scheduleSync();
+  render();
+}
+function renderCardsSection(){
+  const cards=getCards();
+  const content=document.getElementById('cardsContent'); if(!content) return;
+  if(!cards.length){
+    content.innerHTML='<div class="empty">No cards added yet — click "+ Add card" to track card balances.</div>';
+    return;
+  }
+  // tally untagged card transactions (old data without cardId)
+  const untagged=S.txns.reduce((s,t)=>s+cardDeltaFor(t,null),0);
+  let html=cards.map(c=>{
+    const bal=S.txns.reduce((s,t)=>s+cardDeltaFor(t,c),0);
+    const cls=bal>0.5?'amb':(bal<-0.5?'pos':'');
+    return `<div class="card-row">
+      <span class="card-name">${c}</span>
+      <span class="card-bal ${cls}">${bal<0?'-':''}₹${fmt(Math.abs(bal))}</span>
+      <button class="card-pay-btn" onclick="payCardBill('${c}')">Pay bill</button>
+      <button class="card-del" onclick="removeCard('${c}')" title="Remove card">×</button>
+    </div>`;
+  }).join('');
+  if(Math.abs(untagged)>0.5){
+    html+=`<div class="card-row"><span class="card-name" style="color:var(--faint)">Untagged (old entries)</span><span class="card-bal ${untagged>0?'amb':''}">${untagged<0?'-':''}₹${fmt(Math.abs(untagged))}</span><button class="card-pay-btn" onclick="payCardBill(null)">Pay bill</button></div>`;
+  }
+  content.innerHTML=html;
+}
 function cashDelta(t){
   if(t.type==='income') return t.amount;
   if(t.type==='expense'){
@@ -945,7 +1040,7 @@ function render(){
     const sign = (t.type==='income'||t.type==='cashback'||(t.type==='repay'&&t.dir==='in')||(t.type==='opening'&&t.dir==='owe')) ? '+' : (t.type==='transfer'||t.type==='opening'||t.type==='group'?'~':'-');
     const cls = sign==='+'?'pos':(sign==='~'?'':'');
     const spreadTag = t.spreadDays>1 ? ('· \u00f7'+t.spreadDays+'d') : (t.spread>1?('· \u00f7'+t.spread+'mo'):'');
-    const srcTag = t.type==='expense' ? (srcOf(t)==='card'?'· card':(srcOf(t)==='wallet'?'· wallet':'')) : '';
+    const srcTag = t.type==='expense' ? (srcOf(t)==='card'?('· '+(t.cardId||'card')):(srcOf(t)==='wallet'?'· wallet':'')) : '';
     const who = (Array.isArray(t.splits)&&t.splits.length)
       ? t.splits.map(s=>s.name+' '+fmt(s.share)).join(', ') + (t.paidBy==='other'?' (you owe)':'')
       : t.cpName;
@@ -953,6 +1048,7 @@ function render(){
     return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="del" data-id="${t.id}">×</button></div>`;
   }).join('') : '<div class="empty">No entries yet — add your first above.'+(SYNC.code?'':' <span style="cursor:pointer;color:var(--amber);text-decoration:underline" onclick="setupSync()">Set up sync</span> to pull data from another device.')+'</div>';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
+  renderCardsSection();
   renderGroup();
 }
 
@@ -978,15 +1074,18 @@ async function delTx(id){
 }
 
 async function openCardPay(){
-  const owed = S.txns.reduce((s,t)=>s+cardDelta(t),0);
-  const v = prompt('Credit-card bill payment from bank (\u20b9):', Math.max(0,Math.round(owed)));
-  if(v===null) return;
-  const amt = parseFloat(v);
-  if(isNaN(amt)||amt<=0) return;
-  S.txns.push({id:Date.now(), type:'cardpay', amount:amt, date:new Date().toISOString().slice(0,10), desc:'Credit-card bill payment', yourShare:0, cp:false, cpName:''});
-  await setJSON('ledger:txns', S.txns);
-  await markEdit(); scheduleSync();
-  render();
+  const cards=getCards();
+  if(cards.length===1){ await payCardBill(cards[0]); return; }
+  if(cards.length>1){
+    const opts=cards.map((c,i)=>`${i+1}. ${c}`).join('\n');
+    const v=prompt(`Which card?\n${opts}\n\nEnter number:`);
+    if(!v) return;
+    const idx=parseInt(v)-1;
+    if(idx>=0 && idx<cards.length){ await payCardBill(cards[idx]); return; }
+    return;
+  }
+  // no cards configured \u2014 fall back to untagged payment
+  await payCardBill(null);
 }
 
 /* ---- form ---- */
@@ -1063,6 +1162,7 @@ async function add(){
     t.category = document.getElementById('category').value;
     t.household = document.getElementById('household').checked;
     t.src = document.getElementById('paySrc').value;
+    if(t.src==='card'){ const cs=document.getElementById('cardSel'); t.cardId=cs&&cs.value?cs.value:null; }
     t.cashback = parseFloat(document.getElementById('cashbackAmt').value)||0;
     const sv = document.getElementById('spread').value;
     if(sv[0]==='d') t.spreadDays = parseInt(sv.slice(1))||1; else t.spread = parseInt(sv.slice(1))||1;
@@ -1135,6 +1235,7 @@ async function add(){
   document.querySelectorAll('.gs-share').forEach(i=>i.value='');
   document.getElementById('spread').value='m1';
   document.getElementById('paySrc').value='bank';
+  document.getElementById('cardSelRow').classList.add('hidden');
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
   document.getElementById('splitFields').classList.add('hidden');
   document.getElementById('splitRows').innerHTML='';
@@ -1294,6 +1395,8 @@ async function init(){
   document.getElementById('deleteGroupBtn').onclick=()=>{ const g=window._editingGroup; if(g&&g.id) deleteGroup(g.id); };
   document.getElementById('groupEq').onclick=groupEqualSplit;
   populateGroupSelects();
+  fillCardSelects();
+  document.getElementById('addCardBtn').onclick=addCard;
   // sync
   SYNC.code = (await rawGet('ledger:synccode'))||null;
   document.getElementById('syncBtn').onclick=()=>SYNC.code ? doSync(true) : setupSync();
