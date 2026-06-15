@@ -93,6 +93,8 @@
   .tx .val{font-family:'JetBrains Mono',monospace;white-space:nowrap}
   .tx .del{color:var(--faint);cursor:pointer;font-size:15px;padding:0 4px;background:none;border:none}
   .tx .del:hover{color:var(--clay)}
+  .tx .edt{color:var(--faint);cursor:pointer;font-size:13px;padding:0 4px;background:none;border:none}
+  .tx .edt:hover{color:var(--amber)}
 
   .note{color:var(--faint);font-size:11.5px;text-align:center;margin-top:24px;line-height:1.6}
 
@@ -294,7 +296,10 @@
         <div style="font-size:11.5px;color:var(--faint);margin:-4px 0 8px">If you paid, this also reduces your cash balance.</div>
       </div>
 
-      <button class="add" id="addBtn">Add expense</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="add" id="addBtn" style="flex:1">Add expense</button>
+        <button class="btn hidden" id="cancelEditBtn" onclick="cancelEdit()" style="white-space:nowrap">✕ Cancel edit</button>
+      </div>
     </div>
 
     <!-- BUDGET + PEOPLE -->
@@ -360,7 +365,7 @@ const fmt = n => "₹" + Math.round(n).toLocaleString('en-IN');
 const monthKey = d => d.slice(0,7);
 const nowMonth = () => new Date().toISOString().slice(0,7);
 
-let S = {txns:[], budgets:{}, settings:{startingCash:72612}, deleted:[], type:"expense", month:nowMonth()};
+let S = {txns:[], budgets:{}, settings:{startingCash:72612}, deleted:[], type:"expense", month:nowMonth(), editId:null};
 
 // Storage adapter: uses Claude's window.storage inside the artifact,
 // falls back to localStorage when deployed standalone (Netlify, etc.)
@@ -825,6 +830,16 @@ function renderGroup(){
       html+='</div>';
     } else { html+='<div style="margin-top:10px;font-size:13px;color:var(--green);text-align:center;padding:6px 0">All settled up ✓</div>'; }
   }
+  // migration notice: group entries without category
+  const g2=getActiveGroup();
+  const uncatGroup=g2 ? S.txns.filter(t=>t.type==='group'&&!t.category&&((t.groupId&&t.groupId===g2.id)||(getGroups()[0]===g2&&!t.groupId))) : [];
+  if(uncatGroup.length){
+    html+=`<div style="margin-top:12px;padding:10px 12px;background:var(--panel-2);border:1px solid var(--amber-soft);border-radius:10px;font-size:12.5px;color:var(--muted)">
+      <b style="color:var(--amber)">⚠ ${uncatGroup.length} group entr${uncatGroup.length>1?'ies':'y'} ha${uncatGroup.length>1?'ve':'s'} no category.</b>
+      Click ✎ in the transaction list to edit ${uncatGroup.length>1?'them':'it'} and assign a category so ${uncatGroup.length>1?'they':'it'} count${uncatGroup.length===1?'s':''} correctly in your budget.
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${uncatGroup.map(t=>`<span style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px" onclick="editTx(${t.id})">${t.date} · ${t.desc||fmt(t.amount)}</span>`).join('')}</div>
+    </div>`;
+  }
   content.innerHTML=html;
 }
 function populateGroupSelects(g){
@@ -1056,9 +1071,10 @@ function render(){
       ? t.splits.map(s=>s.name+' '+fmt(s.share)).join(', ') + (t.paidBy==='other'?' (you owe)':'')
       : t.cpName;
     const meta = [t.category||t.type, who?('· '+who):'', t.household?'· household':'', srcTag, spreadTag].filter(Boolean).join(' ');
-    return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="del" data-id="${t.id}">×</button></div>`;
+    return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="edt" data-id="${t.id}" title="Edit">✎</button><button class="del" data-id="${t.id}">×</button></div>`;
   }).join('') : '<div class="empty">No entries yet — add your first above.'+(SYNC.code?'':' <span style="cursor:pointer;color:var(--amber);text-decoration:underline" onclick="setupSync()">Set up sync</span> to pull data from another device.')+'</div>';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
+  document.querySelectorAll('.edt').forEach(b=>b.onclick=()=>editTx(+b.dataset.id));
   renderCardsSection();
   renderGroup();
 }
@@ -1116,8 +1132,8 @@ function setType(type){
   // amount field not needed for settle (it has its own)
   document.querySelector('.row:has(#amount)').style.display = isSettle ? 'none' : '';
   document.getElementById('dirF').style.display = type==='repay' ? '' : 'none';
-  document.getElementById('addBtn').textContent =
-    isOpening ? 'Set opening balance' : isGroup ? 'Add group expense' : isSettle ? 'Log settlement' : ('Add '+type);
+  document.getElementById('addBtn').textContent = S.editId ? 'Save changes' :
+    (isOpening ? 'Set opening balance' : isGroup ? 'Add group expense' : isSettle ? 'Log settlement' : ('Add '+type));
 }
 
 /* split rows (one per person) */
@@ -1160,6 +1176,77 @@ function splitEqually(){
   rows.forEach(r=>r.querySelector('.sp-share').value=per);
   document.getElementById('yourShare').value=Math.round(((amt-cb)-per*rows.length)*100)/100;
   updateShareHint();
+}
+
+function cancelEdit(){
+  S.editId=null;
+  document.getElementById('cancelEditBtn').classList.add('hidden');
+  setType(S.type);
+}
+
+function editTx(id){
+  const t=S.txns.find(tx=>tx.id===id); if(!t) return;
+  S.editId=id;
+  setType(t.type);
+  // common fields
+  document.getElementById('amount').value=t.amount||'';
+  document.getElementById('date').value=t.date||'';
+  document.getElementById('desc').value=t.desc||'';
+  if(t.type==='expense'){
+    document.getElementById('category').value=t.category||'';
+    document.getElementById('household').checked=!!t.household;
+    const src=srcOf(t);
+    document.getElementById('paySrc').value=src;
+    if(src==='card'){
+      document.getElementById('cardSelRow').classList.remove('hidden');
+      if(t.cardId){ const cs=document.getElementById('cardSel'); if(cs) cs.value=t.cardId; }
+    }
+    document.getElementById('cashbackAmt').value=t.cashback||'';
+    if(t.spreadDays>1) document.getElementById('spread').value='d'+t.spreadDays;
+    else if(t.spread>1) document.getElementById('spread').value='m'+t.spread;
+    else document.getElementById('spread').value='m1';
+    if(t.cp){
+      document.getElementById('isSplit').checked=true;
+      document.getElementById('splitFields').classList.remove('hidden');
+      const paidBy=t.paidBy||'you';
+      document.getElementById('paidBy').value=paidBy;
+      const other=paidBy==='other';
+      document.getElementById('payerRow').classList.toggle('hidden',!other);
+      document.getElementById('othersBlock').classList.toggle('hidden',other);
+      if(other){
+        document.getElementById('cpExp').value=t.cpName||'';
+        document.getElementById('yourShare').value=t.yourShare||'';
+      } else {
+        document.getElementById('splitRows').innerHTML='';
+        (t.splits||[]).forEach(s=>addSplitRow(s.name,s.share));
+        document.getElementById('yourShare').value=t.yourShare||'';
+      }
+    }
+  } else if(t.type==='lend'||t.type==='repay'){
+    document.getElementById('cpPerson').value=t.cpName||'';
+    if(t.type==='repay') document.getElementById('dir').value=t.dir||'in';
+  } else if(t.type==='group'){
+    document.getElementById('groupCategory').value=t.category||'';
+    if(t.groupId){ const gs=document.getElementById('groupSelector'); if(gs){ gs.value=t.groupId; onGroupSelectorChange(); } }
+    document.getElementById('groupPayer').value=t.payer||'you';
+    document.querySelectorAll('.gs-share').forEach(i=>{
+      const s=(t.shares||[]).find(x=>x.name===i.dataset.member);
+      i.value=s?s.share:'';
+    });
+    document.getElementById('amount').value=t.amount||'';
+  } else if(t.type==='group-settle'){
+    if(t.groupId){ const ss=document.getElementById('settleSelector'); if(ss){ ss.value=t.groupId; onSettleSelectorChange(); } }
+    document.getElementById('settleFrom').value=t.from||'';
+    document.getElementById('settleTo').value=t.to||'';
+    document.getElementById('amount').value=t.amount||'';
+  } else if(t.type==='opening'){
+    document.getElementById('cpOpening').value=t.cpName||'';
+    document.getElementById('openingDir').value=t.dir||'owe';
+  }
+  document.getElementById('addBtn').textContent='Save changes';
+  document.getElementById('cancelEditBtn').classList.remove('hidden');
+  updateShareHint();
+  document.querySelector('.card').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
 async function add(){
@@ -1239,7 +1326,15 @@ async function add(){
     if(!t.cpName){ document.getElementById('cpOpening').focus(); return; }
   }
 
-  S.txns.push(t);
+  if(S.editId){
+    const idx=S.txns.findIndex(tx=>tx.id===S.editId);
+    t.id=S.editId;
+    if(idx>=0) S.txns[idx]=t; else S.txns.push(t);
+    S.editId=null;
+    document.getElementById('cancelEditBtn').classList.add('hidden');
+  } else {
+    S.txns.push(t);
+  }
   await setJSON('ledger:txns', S.txns);
   await markEdit(); scheduleSync();
   // reset
