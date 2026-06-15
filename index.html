@@ -304,6 +304,7 @@
             <option value="wallet">Amazon Pay wallet</option>
           </select></div>
         </div>
+        <label class="toggle" style="margin:4px 0 6px"><input type="checkbox" id="groupHousehold"> Household expense</label>
         <div style="font-size:11.5px;color:var(--faint);margin:-2px 0 8px">Your share counts toward your monthly budget.</div>
       </div>
 
@@ -1117,7 +1118,7 @@ function render(){
   }).join('') : '<div class="empty">Set budgets by adding expenses, or edit defaults.</div>';
 
   // household hint
-  const hh = S.txns.reduce((s,t)=>s+(t.household?budgetSliceForMonth(t,S.month):0),0);
+  const hh = S.txns.reduce((s,t)=>s+(t.household&&(t.type==='expense'||t.type==='group')?budgetSliceForMonth(t,S.month):0),0);
   document.getElementById('hhHint').textContent = hh? ('household this month: '+fmt(hh)) : '';
 
   // people
@@ -1303,6 +1304,7 @@ function editTx(id){
     if(t.type==='repay') document.getElementById('dir').value=t.dir||'in';
   } else if(t.type==='group'){
     document.getElementById('groupCategory').value=t.category||'';
+    document.getElementById('groupHousehold').checked=!!t.household;
     if(t.groupId){ const gs=document.getElementById('groupSelector'); if(gs){ gs.value=t.groupId; onGroupSelectorChange(); } }
     document.getElementById('groupPayer').value=t.payer||'you';
     const gps=document.getElementById('groupPaySrc'); if(gps) gps.value=srcOf(t);
@@ -1387,6 +1389,7 @@ async function add(){
     t.payer=document.getElementById('groupPayer').value;
     t.src=document.getElementById('groupPaySrc').value||'bank';
     if(t.src==='card'){ const gc=document.getElementById('groupCardSel'); t.cardId=gc&&gc.value?gc.value:null; }
+    t.household=document.getElementById('groupHousehold').checked;
     t.cashback=parseFloat(document.getElementById('groupCashbackAmt').value)||0;
     if(t.cashback){ const gcd=document.getElementById('groupCashbackDest'); t.cashbackTo=gcd?gcd.value:'wallet'; }
     const shares=[...document.querySelectorAll('.gs-share')].map(i=>({name:i.dataset.member,share:parseFloat(i.value)||0})).filter(s=>s.share>0);
@@ -1436,6 +1439,7 @@ async function add(){
   const cbd=document.getElementById('cashbackDest'); if(cbd) cbd.value='wallet';
   document.getElementById('groupCashbackAmt').value='';
   const gcbd=document.getElementById('groupCashbackDest'); if(gcbd) gcbd.value='wallet';
+  document.getElementById('groupHousehold').checked=false;
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
   document.getElementById('splitFields').classList.add('hidden');
   document.getElementById('splitRows').innerHTML='';
