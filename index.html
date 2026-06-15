@@ -740,7 +740,7 @@ function populateGroupSelects(g){
   ['groupSelector','settleSelector'].forEach(id=>{
     const el=document.getElementById(id); if(!el) return;
     el.innerHTML=gOpts;
-    el.value=g.id; // set to the group whose members we just loaded
+    if(g) el.value=g.id; // set to the group whose members we just loaded
   });
   const gsr=document.getElementById('groupSelectorRow'); if(gsr) gsr.classList.toggle('hidden',!showSel);
   const ssr=document.getElementById('settleSelectorRow'); if(ssr) ssr.classList.toggle('hidden',!showSel);
@@ -951,7 +951,7 @@ function render(){
       : t.cpName;
     const meta = [t.category||t.type, who?('· '+who):'', t.household?'· household':'', srcTag, spreadTag].filter(Boolean).join(' ');
     return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="del" data-id="${t.id}">×</button></div>`;
-  }).join('') : '<div class="empty">No entries yet — add your first above.</div>';
+  }).join('') : '<div class="empty">No entries yet — add your first above.'+(SYNC.code?'':' <span style="cursor:pointer;color:var(--amber);text-decoration:underline" onclick="setupSync()">Set up sync</span> to pull data from another device.')+'</div>';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
   renderGroup();
 }
