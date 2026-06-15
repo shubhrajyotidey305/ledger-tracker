@@ -729,7 +729,7 @@ function simplifyDebts(net){
   const payments=[]; let ci=0,di=0;
   while(ci<cv.length&&di<dv.length){
     const pay=Math.min(cv[ci].bal,dv[di].bal);
-    if(pay>0.5) payments.push({from:dv[di].name,to:cv[ci].name,amount:Math.round(pay)});
+    if(pay>0.5) payments.push({from:dv[di].name,to:cv[ci].name,amount:Math.round(pay*100)/100});
     cv[ci].bal-=pay; dv[di].bal-=pay;
     if(cv[ci].bal<0.5) ci++; if(dv[di].bal<0.5) di++;
   }
