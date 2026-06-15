@@ -273,12 +273,13 @@
           <div class="f"><label>Group</label><select id="groupSelector" onchange="onGroupSelectorChange()"></select></div>
         </div>
         <div class="row">
+          <div class="f"><label>Category</label><select id="groupCategory"></select></div>
           <div class="f"><label>Paid by</label><select id="groupPayer"></select></div>
           <div class="f" style="justify-content:flex-end"><button class="btn" type="button" id="groupEq" style="align-self:flex-end">&divide; Equal split</button></div>
         </div>
         <div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Each member's share</div>
         <div id="groupShares"></div>
-        <div style="font-size:11.5px;color:var(--faint);margin:-2px 0 8px">Group-only — doesn't affect your personal budget or cash.</div>
+        <div style="font-size:11.5px;color:var(--faint);margin:-2px 0 8px">Your share counts toward your monthly budget.</div>
       </div>
 
       <!-- group settle-up -->
@@ -605,6 +606,11 @@ function ymdUTC(s){ const [y,m,d]=s.split('-').map(Number); return Date.UTC(y,m-
 // spreadDays (28/56/84/365...) splits by actual day-overlap with each calendar month;
 // spread (months) splits equally across N months. Default = whole amount in its own month.
 function budgetSliceForMonth(t, ym){
+  if(t.type==='group'){
+    if(monthKey(t.date)!==ym) return 0;
+    const myShare=(Array.isArray(t.shares)?t.shares.find(s=>s.name==='you'):null);
+    return myShare ? myShare.share : 0;
+  }
   if(t.type!=='expense') return 0;
   if(t.spreadDays && t.spreadDays>1){
     const start=ymdUTC(t.date), end=start+t.spreadDays*DAY;
@@ -1007,7 +1013,12 @@ function render(){
 
   // budgets
   const spentByCat = {};
-  S.txns.forEach(t=>{ if(t.type==='expense'){ const sl=budgetSliceForMonth(t,S.month); if(sl) spentByCat[t.category]=(spentByCat[t.category]||0)+sl; } });
+  S.txns.forEach(t=>{
+    if(t.type==='expense'||t.type==='group'){
+      const sl=budgetSliceForMonth(t,S.month);
+      if(sl){ const cat=t.category||'Group'; spentByCat[cat]=(spentByCat[cat]||0)+sl; }
+    }
+  });
   const cats = Object.keys(S.budgets).filter(c=>(+S.budgets[c]>0)||spentByCat[c]);
   document.getElementById('bTot').textContent = fmt(spent)+' / '+fmt(totalBudget);
   document.getElementById('budgets').innerHTML = cats.length ? cats.map(c=>{
@@ -1198,6 +1209,7 @@ async function add(){
     t.yourShare=0; t.category='Cashback';
   } else if(S.type==='group'){
     t.yourShare=0; t.cp=false;
+    t.category=document.getElementById('groupCategory').value||'Group';
     // determine which group: use selector if visible (2+ groups), else active group
     const gRow=document.getElementById('groupSelectorRow');
     const gSel=document.getElementById('groupSelector');
@@ -1295,11 +1307,14 @@ function catList(){
   return [...CATS, ...extra];
 }
 function fillCatSelect(){
-  const sel=document.getElementById('category');
-  const cur=sel.value;
   const list=catList();
-  sel.innerHTML = list.map(c=>`<option>${c}</option>`).join('');
-  if(cur && list.includes(cur)) sel.value=cur;
+  const opts=list.map(c=>`<option>${c}</option>`).join('');
+  ['category','groupCategory'].forEach(id=>{
+    const sel=document.getElementById(id); if(!sel) return;
+    const cur=sel.value;
+    sel.innerHTML=opts;
+    if(cur && list.includes(cur)) sel.value=cur;
+  });
 }
 function renderBudgetEditor(){
   const el=document.getElementById('budEditor');
