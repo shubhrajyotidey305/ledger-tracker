@@ -137,6 +137,7 @@
     </div>
     <div class="toolbar">
       <select class="msel" id="month"></select>
+      <button class="btn" id="setupWizardBtn" title="Re-run the starting-point setup">⚙ Setup</button>
       <button class="btn" id="setCash">Set cash</button>
       <button class="btn" id="payCard">Pay card bill</button>
       <button class="btn" id="syncBtn">Sync</button><span id="syncStatus" style="font-size:11px;color:var(--faint);cursor:pointer;align-self:center" title="Sync settings"></span>
@@ -152,6 +153,26 @@
     <div style="display:flex;gap:8px;margin-top:8px">
       <button class="add" id="doRestore" style="margin:0;max-width:160px">Restore data</button>
       <button class="btn" id="cancelRestore">Cancel</button>
+    </div>
+  </div>
+
+  <!-- ONBOARDING WIZARD -->
+  <div id="onbOverlay" class="hidden" style="position:fixed;inset:0;z-index:9999;background:rgba(4,6,10,.74);backdrop-filter:blur(3px);overflow-y:auto;padding:22px 12px;box-sizing:border-box">
+    <div style="max-width:580px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 20px 18px;box-shadow:0 20px 60px rgba(0,0,0,.55)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">
+        <div>
+          <div style="font-weight:700;font-size:19px;line-height:1.1">Set up your starting point</div>
+          <div id="onbStepName" style="font-size:12px;color:var(--faint);margin-top:3px"></div>
+        </div>
+        <button onclick="closeWizard()" class="btn" style="white-space:nowrap">Skip for now</button>
+      </div>
+      <div id="onbProgress" style="display:flex;gap:5px;margin-bottom:16px"></div>
+      <div id="onbBody" style="min-height:160px"></div>
+      <div style="display:flex;gap:8px;margin-top:18px;align-items:center">
+        <button id="onbBack" class="btn">← Back</button>
+        <div style="flex:1"></div>
+        <button id="onbNext" class="add" style="margin:0;max-width:200px;min-width:130px">Next →</button>
+      </div>
     </div>
   </div>
 
@@ -522,6 +543,20 @@ function srcOf(t){ return t.src || (t.card ? 'card' : 'bank'); } // back-compat 
 
 /* ---- card management ---- */
 function getCards(){ return S.settings.cards||[]; }
+function cardMeta(c){ return (S.settings.cardMeta||{})[c]||{}; }
+function cardOpening(c){ const m=cardMeta(c); return (m&&+m.opening)||0; }
+function totalCardOpening(){ return getCards().reduce((s,c)=>s+cardOpening(c),0); }
+// Current outstanding on a card = onboarding opening + everything charged since, minus payments
+function cardBalance(c){ return cardOpening(c) + S.txns.reduce((s,t)=>s+cardDeltaFor(t,c),0); }
+const ORD=n=>{n=+n;const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);};
+// next occurrence of a day-of-month from today, as a short label
+function nextDueLabel(day){
+  if(!day) return '';
+  const t=new Date(); let y=t.getFullYear(), m=t.getMonth();
+  const mk=(yy,mm)=>{const last=new Date(yy,mm+1,0).getDate();return new Date(yy,mm,Math.min(day,last));};
+  let d=mk(y,m); if(d < new Date(t.getFullYear(),t.getMonth(),t.getDate())){ m++; if(m>11){m=0;y++;} d=mk(y,m); }
+  return d.toLocaleString('en-IN',{month:'short',day:'numeric'});
+}
 function cardDeltaFor(t, cardId){
   if(t.type==='cardpay') return (t.cardId||null)===cardId ? -t.amount : 0;
   if(t.type==='cashback' && t.cardId) return t.cardId===cardId ? -t.amount : 0;
@@ -582,19 +617,45 @@ async function addCard(){
   const cards=getCards();
   if(cards.includes(v)){ alert('Card already added.'); return; }
   S.settings.cards=[...cards, v];
+  // optional: capture current bill + billing cycle so the card tile is accurate from day one
+  const ob=prompt(`Current outstanding on ${v} (charged but not yet paid). Leave blank / 0 if none:`, '0');
+  if(ob!==null){
+    const meta={};
+    const opening=parseFloat(ob); if(!isNaN(opening)&&opening>0) meta.opening=Math.round(opening*100)/100;
+    const bd=prompt('Statement / billing day of month (1-31). Optional — leave blank to skip:','');
+    const bdn=parseInt(bd); if(!isNaN(bdn)&&bdn>=1&&bdn<=31) meta.billDay=bdn;
+    const dd=prompt('Payment due day of month (1-31). Optional — leave blank to skip:','');
+    const ddn=parseInt(dd); if(!isNaN(ddn)&&ddn>=1&&ddn<=31) meta.dueDay=ddn;
+    if(Object.keys(meta).length){ S.settings.cardMeta={...(S.settings.cardMeta||{}), [v]:meta}; }
+  }
   await setJSON('ledger:settings', S.settings);
   await markEdit(); scheduleSync();
-  fillCardSelects(); renderCardsSection();
+  fillCardSelects(); renderCardsSection(); render();
+}
+async function editCard(name){
+  const m={...cardMeta(name)};
+  const ob=prompt(`Current outstanding on ${name} (₹):`, m.opening||0);
+  if(ob===null) return;
+  const opening=parseFloat(ob); if(!isNaN(opening)) m.opening=Math.round(opening*100)/100; else delete m.opening;
+  const bd=prompt('Statement / billing day of month (1-31, blank to clear):', m.billDay||'');
+  const bdn=parseInt(bd); if(!isNaN(bdn)&&bdn>=1&&bdn<=31) m.billDay=bdn; else delete m.billDay;
+  const dd=prompt('Payment due day of month (1-31, blank to clear):', m.dueDay||'');
+  const ddn=parseInt(dd); if(!isNaN(ddn)&&ddn>=1&&ddn<=31) m.dueDay=ddn; else delete m.dueDay;
+  S.settings.cardMeta={...(S.settings.cardMeta||{}), [name]:m};
+  await setJSON('ledger:settings', S.settings);
+  await markEdit(); scheduleSync();
+  renderCardsSection(); render();
 }
 async function removeCard(name){
   if(!confirm(`Remove card "${name}"?\nPast transactions tagged to this card stay intact.`)) return;
   S.settings.cards=getCards().filter(c=>c!==name);
+  if(S.settings.cardMeta){ const cm={...S.settings.cardMeta}; delete cm[name]; S.settings.cardMeta=cm; }
   await setJSON('ledger:settings', S.settings);
   await markEdit(); scheduleSync();
   fillCardSelects(); renderCardsSection();
 }
 async function payCardBill(cardId){
-  const owed=S.txns.reduce((s,t)=>s+cardDeltaFor(t,cardId),0);
+  const owed=(cardId?cardOpening(cardId):0)+S.txns.reduce((s,t)=>s+cardDeltaFor(t,cardId),0);
   const label=cardId||'card';
   const v=prompt(`Pay bill for ${label} from bank (₹):`, Math.max(0,Math.round(owed)));
   if(v===null) return;
@@ -616,12 +677,18 @@ function renderCardsSection(){
   // tally untagged card transactions (old data without cardId)
   const untagged=S.txns.reduce((s,t)=>s+cardDeltaFor(t,null),0);
   let html=cards.map(c=>{
-    const bal=S.txns.reduce((s,t)=>s+cardDeltaFor(t,c),0);
+    const bal=cardBalance(c);
     const cls=bal>0.5?'amb':(bal<-0.5?'pos':'');
+    const m=cardMeta(c);
+    const bits=[];
+    if(m.billDay) bits.push('bills '+ORD(m.billDay));
+    if(m.dueDay) bits.push('due '+nextDueLabel(m.dueDay));
+    const hint=bits.length?`<span style="display:block;font-family:'Hanken Grotesk';font-weight:400;font-size:11px;color:var(--faint);letter-spacing:0;margin-top:2px">${bits.join(' · ')}</span>`:'';
     return `<div class="card-row">
-      <span class="card-name">${c}</span>
-      <span class="card-bal ${cls}">${bal<0?'-':''}₹${fmt(Math.abs(bal))}</span>
+      <span class="card-name">${c}${hint}</span>
+      <span class="card-bal ${cls}">${bal<0?'-':''}${fmt(Math.abs(bal))}</span>
       <button class="card-pay-btn" onclick="payCardBill('${c}')">Pay bill</button>
+      <button class="card-del" onclick="editCard('${c}')" title="Edit card" style="color:var(--muted)">&#9998;</button>
       <button class="card-del" onclick="removeCard('${c}')" title="Remove card">×</button>
     </div>`;
   }).join('');
@@ -1088,7 +1155,7 @@ function render(){
   const spent = S.txns.reduce((s,t)=>s+budgetSliceForMonth(t,S.month),0);
   const totalBudget = Object.values(S.budgets).reduce((a,b)=>a+(+b||0),0);
   const netPeople = S.txns.reduce((s,t)=>s+personDelta(t),0);
-  const cardOwed = S.txns.reduce((s,t)=>s+cardDelta(t),0);
+  const cardOwed = totalCardOpening() + S.txns.reduce((s,t)=>s+cardDelta(t),0);
   const walletBal = S.txns.reduce((s,t)=>s+walletDelta(t),0);
 
   document.getElementById('sCash').textContent = fmt(cash);
@@ -1542,6 +1609,295 @@ function renderBudgetEditor(){
   };
 }
 
+/* ================= ONBOARDING WIZARD ================= */
+const ONB_STEPS=['Welcome','Cash on hand','Monthly budgets','Already spent this month','Credit cards','Groups & shared expenses'];
+let WSTEP=0;
+const wEsc=s=>String(s==null?'':s).replace(/"/g,'&quot;');
+
+// pure: net positions -> minimal pairwise debts. +ve net = is owed, -ve = owes.
+function netToPairs(vals){
+  const c=[],d=[];
+  for(const [n,b] of Object.entries(vals)){ if(b>0.5) c.push({name:n,bal:b}); else if(b<-0.5) d.push({name:n,bal:b}); }
+  c.sort((a,b)=>b.bal-a.bal); d.sort((a,b)=>a.bal-b.bal);
+  const pairs=[]; let ci=0,di=0;
+  while(ci<c.length&&di<d.length){
+    const cr=c[ci],db=d[di], amt=Math.min(cr.bal,-db.bal);
+    if(amt>0.5) pairs.push({from:db.name,to:cr.name,amount:Math.round(amt*100)/100});
+    cr.bal-=amt; db.bal+=amt;
+    if(Math.abs(cr.bal)<0.5) ci++; if(Math.abs(db.bal)<0.5) di++;
+  }
+  return pairs;
+}
+
+function onbField(label,inner,hint){
+  return `<div class="f" style="margin-bottom:12px"><label>${label}</label>${inner}${hint?`<div style="font-size:11px;color:var(--faint);margin-top:4px;line-height:1.5">${hint}</div>`:''}</div>`;
+}
+const onbNumStyle="background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 10px;font-size:14px;font-family:'JetBrains Mono',monospace;box-sizing:border-box;width:100%";
+const onbTxtStyle="background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;box-sizing:border-box;width:100%";
+
+function buildWizard(){
+  const body=document.getElementById('onbBody');
+  const flows=S.txns.reduce((s,t)=>s+cashDelta(t),0);
+  const curCash=Math.round((S.settings.startingCash||0)+flows);
+
+  // Step 0 — welcome
+  const s0=`<div class="onb-step">
+    <p style="font-size:14px;color:var(--muted);line-height:1.6;margin:2px 0 12px">This sets up Ledger to match where your money actually stands <b>right now</b> — even if you're starting mid-month. We'll capture, in order:</p>
+    <div style="font-size:13.5px;color:var(--muted);line-height:1.9;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px">
+      <div>💵 <b>Cash on hand</b> — what's in bank + wallet today</div>
+      <div>📊 <b>Monthly budgets</b> — your plan per category</div>
+      <div>🧾 <b>Already spent this month</b> — so "Spent" &amp; "Budget left" are right</div>
+      <div>💳 <b>Credit cards</b> — current unpaid bill + billing/due dates</div>
+      <div>👥 <b>Groups</b> — flatmates / trips and who owes whom</div>
+    </div>
+    <p style="font-size:12px;color:var(--faint);margin-top:12px">Every step is optional — skip anything that doesn't apply. You can re-run this any time from <b>⚙ Setup</b>.</p>
+  </div>`;
+
+  // Step 1 — cash
+  const s1=`<div class="onb-step">
+    ${onbField('How much cash do you have on hand right now? (₹)',
+      `<input id="w-cash" class="num" type="number" inputmode="decimal" value="${curCash}" style="${onbNumStyle}">`,
+      'Add up your bank balance and any cash/UPI money — money you could spend today. Credit-card limits and wallet are handled separately.')}
+    ${onbField('Amazon Pay / wallet balance (₹) — optional',
+      `<input id="w-wallet" class="num" type="number" inputmode="decimal" placeholder="0" style="${onbNumStyle}">`,
+      'Only if you keep a balance there. Recorded as a top-up so the wallet tile starts correct.')}
+  </div>`;
+
+  // Step 2 — budgets
+  const budRows=CATS.map(c=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+      <span style="flex:1;font-size:13.5px;color:var(--muted)">${c}</span>
+      <input data-bud="${wEsc(c)}" class="num" type="number" inputmode="decimal" value="${+S.budgets[c]||''}" placeholder="0" style="${onbNumStyle};max-width:140px">
+    </div>`).join('');
+  const s2=`<div class="onb-step">
+    <p style="font-size:13px;color:var(--muted);line-height:1.5;margin:0 0 12px">Your monthly plan per category. Pre-filled with sensible defaults — tweak or zero out anything.</p>
+    ${budRows}
+  </div>`;
+
+  // Step 3 — already spent
+  const today=new Date();
+  const dom=today.getDate();
+  // prefill from any prior onboarding spend so re-running setup doesn't wipe it
+  const onbSpent={};
+  S.txns.forEach(t=>{ if(t.onboard&&t.type==='expense'&&t.category) onbSpent[t.category]=(onbSpent[t.category]||0)+(+t.amount||0); });
+  const spentRows=CATS.map(c=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px">
+      <span style="flex:1;font-size:13.5px;color:var(--muted)">${c}</span>
+      <input data-spent="${wEsc(c)}" class="num" type="number" inputmode="decimal" placeholder="0" value="${onbSpent[c]?Math.round(onbSpent[c]*100)/100:''}" style="${onbNumStyle};max-width:140px">
+    </div>`).join('');
+  const s3=`<div class="onb-step">
+    <p style="font-size:13px;color:var(--muted);line-height:1.55;margin:0 0 6px">It's the <b>${ORD(dom)}</b> — how much have you already spent in each category <b>this month</b> from bank/cash/UPI?</p>
+    <p style="font-size:11.5px;color:var(--faint);line-height:1.5;margin:0 0 12px">Enter totals you've already paid out of pocket. These count toward "Spent this month" but won't reduce your cash again (you already entered today's cash). Leave blank for ₹0. <b>Card spending goes in the next step</b>, not here.</p>
+    ${spentRows}
+  </div>`;
+
+  // Step 4 — cards
+  const s4=`<div class="onb-step">
+    <p style="font-size:13px;color:var(--muted);line-height:1.55;margin:0 0 12px">Add each credit card with its <b>current unpaid bill</b> and billing cycle. Different due dates are fine — each card tracks its own.</p>
+    <div id="w-cards"></div>
+    <button type="button" class="btn" onclick="wAddCard()" style="margin-top:6px">+ Add a card</button>
+  </div>`;
+
+  // Step 5 — groups
+  const s5=`<div class="onb-step">
+    <p style="font-size:13px;color:var(--muted);line-height:1.55;margin:0 0 12px">Flatmates, trips, anything shared. Add members, then each person's <b>current net balance</b> (from Splitwise or memory): <b>+</b> = they owe you / are owed, <b>−</b> = they owe the group.</p>
+    <div id="w-groups"></div>
+    <button type="button" class="btn" onclick="wAddGroup()" style="margin-top:6px">+ Add a group</button>
+  </div>`;
+
+  body.innerHTML=s0+s1+s2+s3+s4+s5;
+
+  // prefill dynamic rows from existing data (so re-running is non-destructive)
+  const cardsWrap=document.getElementById('w-cards');
+  (getCards()).forEach(c=>wAddCard({name:c, ...cardMeta(c)}));
+  if(!getCards().length) wAddCard();
+  const grpWrap=document.getElementById('w-groups');
+  (getGroups()||[]).forEach(g=>wAddGroup(g));
+  if(!(getGroups()||[]).length) wAddGroup();
+}
+
+function wAddCard(p){
+  p=p||{};
+  const wrap=document.getElementById('w-cards'); if(!wrap) return;
+  const div=document.createElement('div');
+  div.className='w-card-row';
+  div.style.cssText='border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:9px;background:var(--panel-2)';
+  div.innerHTML=`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <input class="wc-name" placeholder="ICICI-7334" value="${wEsc(p.name||'')}" style="${onbTxtStyle};flex:1;font-family:'JetBrains Mono',monospace;text-transform:uppercase">
+      <button type="button" onclick="this.closest('.w-card-row').remove()" style="background:none;border:none;color:var(--faint);font-size:18px;cursor:pointer;padding:0 4px">×</button>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:130px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Current unpaid bill (₹)</label><input class="wc-open" type="number" inputmode="decimal" placeholder="0" value="${p.opening!=null?p.opening:''}" style="${onbNumStyle}"></div>
+      <div style="width:96px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Bills on (day)</label><input class="wc-bill" type="number" inputmode="numeric" placeholder="18" value="${p.billDay!=null?p.billDay:''}" style="${onbNumStyle}"></div>
+      <div style="width:96px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Due on (day)</label><input class="wc-due" type="number" inputmode="numeric" placeholder="5" value="${p.dueDay!=null?p.dueDay:''}" style="${onbNumStyle}"></div>
+    </div>`;
+  wrap.appendChild(div);
+}
+
+function wAddGroup(g){
+  g=g||{};
+  const wrap=document.getElementById('w-groups'); if(!wrap) return;
+  const div=document.createElement('div');
+  div.className='w-group-row';
+  div.style.cssText='border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;background:var(--panel-2)';
+  div.innerHTML=`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:9px">
+      <input class="wg-name" placeholder="Group name — e.g. A-144 Noida" value="${wEsc(g.name||'')}" style="${onbTxtStyle};flex:1">
+      <button type="button" onclick="this.closest('.w-group-row').remove()" style="background:none;border:none;color:var(--faint);font-size:18px;cursor:pointer;padding:0 4px">×</button>
+    </div>
+    <label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Members — comma-separated, not including you</label>
+    <input class="wg-members" placeholder="Sahil, Vipin, Devoneel" value="${wEsc((g.members||[]).join(', '))}" oninput="wRefreshNet(this)" style="${onbTxtStyle};margin-bottom:10px">
+    <div style="font-size:10.5px;color:var(--faint);margin-bottom:6px">Current net balance per person <span style="color:var(--muted)">(+ owed to them / − they owe)</span></div>
+    <div class="wg-net"></div>`;
+  wrap.appendChild(div);
+  // seed net rows from members + any existing openingPairs
+  wRefreshNet(div.querySelector('.wg-members'), seedNetFromGroup(g));
+}
+
+function seedNetFromGroup(g){
+  if(!g||!g.openingPairs) return null;
+  const net={};
+  g.openingPairs.forEach(p=>{
+    const fk=p.from==='you'?'you':p.from.toLowerCase();
+    const tk=p.to==='you'?'you':p.to.toLowerCase();
+    net[fk]=(net[fk]||0)-p.amount; net[tk]=(net[tk]||0)+p.amount;
+  });
+  return net;
+}
+
+function wRefreshNet(membersInput, seed){
+  const block=membersInput.closest('.w-group-row');
+  const cont=block.querySelector('.wg-net');
+  // preserve already typed values
+  const prev={};
+  cont.querySelectorAll('.wg-val').forEach(i=>{ if(i.value!=='') prev[i.dataset.k]=i.value; });
+  const members=membersInput.value.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
+  const keys=[{k:'you',label:'You'},...members.map(m=>({k:m.toLowerCase(),label:m}))];
+  cont.innerHTML=keys.map(o=>{
+    let v=prev[o.k]!=null?prev[o.k]:'';
+    if(v===''&&seed&&seed[o.k]!=null&&Math.abs(seed[o.k])>0.01) v=Math.round(seed[o.k]*100)/100;
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="flex:1;font-size:13px;color:var(--muted)">${o.label}</span>
+      <input class="wg-val" data-k="${wEsc(o.k)}" type="number" inputmode="decimal" placeholder="0" value="${v}" style="${onbNumStyle};max-width:130px">
+    </div>`;
+  }).join('');
+}
+
+function renderWizardChrome(){
+  document.getElementById('onbStepName').textContent='Step '+(WSTEP+1)+' of '+ONB_STEPS.length+' · '+ONB_STEPS[WSTEP];
+  const prog=document.getElementById('onbProgress');
+  prog.innerHTML=ONB_STEPS.map((_,i)=>`<div style="flex:1;height:4px;border-radius:3px;background:${i<=WSTEP?'var(--amber)':'var(--line)'}"></div>`).join('');
+  document.querySelectorAll('#onbBody .onb-step').forEach((el,i)=>el.style.display=i===WSTEP?'block':'none');
+  document.getElementById('onbBack').style.visibility=WSTEP===0?'hidden':'visible';
+  document.getElementById('onbNext').textContent=WSTEP===ONB_STEPS.length-1?'Finish & save ✓':'Next →';
+}
+
+function openWizard(){
+  WSTEP=0;
+  buildWizard();
+  renderWizardChrome();
+  document.getElementById('onbOverlay').classList.remove('hidden');
+}
+function closeWizard(){
+  document.getElementById('onbOverlay').classList.add('hidden');
+  // mark as seen so it doesn't auto-pop again, even on skip
+  S.settings.onboarded=true; setJSON('ledger:settings',S.settings);
+}
+function wizardNext(){
+  if(WSTEP<ONB_STEPS.length-1){ WSTEP++; renderWizardChrome(); document.getElementById('onbBody').scrollTop=0; window.scrollTo(0,0); }
+  else finishWizard();
+}
+function wizardBack(){ if(WSTEP>0){ WSTEP--; renderWizardChrome(); } }
+
+async function finishWizard(){
+  const num=el=>{ const v=parseFloat(el&&el.value); return isNaN(v)?0:v; };
+
+  // 2. budgets
+  document.querySelectorAll('#onbBody [data-bud]').forEach(i=>{
+    const v=parseFloat(i.value); S.budgets[i.dataset.bud]=isNaN(v)?0:Math.round(v);
+  });
+
+  // 3. already-spent → expense entries (idempotent: clear prior onboarding entries first)
+  S.txns=S.txns.filter(t=>!t.onboard);
+  const today=new Date().toISOString().slice(0,10);
+  let totalSpent=0, seq=0;
+  document.querySelectorAll('#onbBody [data-spent]').forEach(i=>{
+    const v=parseFloat(i.value);
+    if(!isNaN(v)&&v>0){
+      totalSpent+=v;
+      S.txns.push({id:Date.now()+(seq++), type:'expense', category:i.dataset.spent,
+        amount:Math.round(v*100)/100, yourShare:Math.round(v*100)/100, spread:1,
+        src:'bank', paidBy:'you', cp:false, cpName:'', date:today,
+        desc:'Opening balance — already spent this month', onboard:true});
+    }
+  });
+
+  // 1. cash — set so the tile shows entered cash after onboarding expenses are counted
+  const cashEl=document.getElementById('w-cash');
+  if(cashEl && cashEl.value!==''){
+    const entered=num(cashEl);
+    // existing non-onboard flows (re-run safety)
+    const flows=S.txns.reduce((s,t)=>s+(t.onboard?0:cashDelta(t)),0);
+    S.settings.startingCash = entered - flows + totalSpent;
+  }
+  // wallet top-up — seed via a wallet credit (no card) so it hits the wallet tile only,
+  // not cash or budget. (prior onboard entries already cleared above)
+  const wEl=document.getElementById('w-wallet');
+  if(wEl && num(wEl)>0){
+    S.txns.push({id:Date.now()+(seq++), type:'cashback', amount:Math.round(num(wEl)*100)/100,
+      cardId:null, date:today, desc:'Opening Amazon Pay balance', onboard:true,
+      yourShare:0, cp:false, cpName:''});
+  }
+
+  // 4. cards
+  const cm={...(S.settings.cardMeta||{})};
+  let cards=[...getCards()];
+  document.querySelectorAll('#onbBody .w-card-row').forEach(row=>{
+    const name=(row.querySelector('.wc-name').value||'').trim().toUpperCase();
+    if(!name) return;
+    if(!/^[A-Z0-9]+-[0-9]{4}$/.test(name)) return; // skip malformed silently
+    if(!cards.includes(name)) cards.push(name);
+    const meta={};
+    const op=parseFloat(row.querySelector('.wc-open').value); if(!isNaN(op)&&op>0) meta.opening=Math.round(op*100)/100;
+    const bd=parseInt(row.querySelector('.wc-bill').value); if(!isNaN(bd)&&bd>=1&&bd<=31) meta.billDay=bd;
+    const dd=parseInt(row.querySelector('.wc-due').value); if(!isNaN(dd)&&dd>=1&&dd<=31) meta.dueDay=dd;
+    cm[name]=meta;
+  });
+  S.settings.cards=cards;
+  S.settings.cardMeta=cm;
+
+  // 5. groups (match by name → update; else create)
+  S.settings.groups=S.settings.groups||[];
+  document.querySelectorAll('#onbBody .w-group-row').forEach(row=>{
+    const name=(row.querySelector('.wg-name').value||'').trim();
+    const members=row.querySelector('.wg-members').value.split(/[,;]+/).map(s=>s.trim()).filter(Boolean);
+    if(!name||!members.length) return;
+    const vals={};
+    row.querySelectorAll('.wg-val').forEach(i=>{ const v=parseFloat(i.value); if(!isNaN(v)&&v!==0) vals[i.dataset.k]=v; });
+    const openingPairs=netToPairs(vals);
+    const existing=S.settings.groups.find(g=>(g.name||'').toLowerCase()===name.toLowerCase());
+    if(existing){ existing.members=members; existing.openingPairs=openingPairs; }
+    else{
+      const id='grp_'+Date.now()+'_'+(seq++);
+      S.settings.groups.push({id, name, members, startDate:today, openingPairs});
+      if(!S.settings.activeGroupId) S.settings.activeGroupId=id;
+    }
+  });
+  if(!S.settings.activeGroupId && S.settings.groups[0]) S.settings.activeGroupId=S.settings.groups[0].id;
+
+  S.settings.onboarded=true;
+
+  await setJSON('ledger:txns', S.txns);
+  await setJSON('ledger:budgets', S.budgets);
+  await setJSON('ledger:settings', S.settings);
+  await markEdit(); scheduleSync();
+
+  document.getElementById('onbOverlay').classList.add('hidden');
+  fillCatSelect(); fillCardSelects(); renderCardsSection();
+  populateGroupSelects(); renderGroup();
+  render();
+  alert('All set! Your starting point is saved. Edit anything any time — or re-run setup from ⚙ Setup.');
+}
+
 async function init(){
   document.getElementById('date').value = new Date().toISOString().slice(0,10);
   document.getElementById('dateHint').textContent = '';
@@ -1604,6 +1960,14 @@ async function init(){
   populateGroupSelects();
   fillCardSelects();
   document.getElementById('addCardBtn').onclick=addCard;
+  // onboarding wizard
+  document.getElementById('setupWizardBtn').onclick=openWizard;
+  document.getElementById('onbNext').onclick=wizardNext;
+  document.getElementById('onbBack').onclick=wizardBack;
+  // auto-open on a fresh, never-onboarded install (no data entered yet)
+  if(!S.settings.onboarded && !(S.txns&&S.txns.length) && !getCards().length && !(getGroups()||[]).length){
+    openWizard();
+  }
   // sync
   SYNC.code = (await rawGet('ledger:synccode'))||null;
   document.getElementById('syncBtn').onclick=()=>SYNC.code ? doSync(true) : setupSync();
