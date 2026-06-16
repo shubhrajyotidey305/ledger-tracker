@@ -460,7 +460,13 @@ async function doSync(manual){
       remoteEdit = remote.lastEdit||0;
       const del = new Set([...(remote.deleted||[]), ...S.deleted]);
       const byId = {};
-      [...S.txns, ...remote.txns].forEach(t=>{ if(t && !del.has(t.id) && !(t.id in byId)) byId[t.id]=t; });
+      // Keep the most-recently-edited copy per id, so edits (e.g. changing a
+      // group expense's category) propagate instead of a stale copy winning.
+      [...S.txns, ...remote.txns].forEach(t=>{
+        if(!t || del.has(t.id)) return;
+        const ex = byId[t.id];
+        if(!ex || (+t.mtime||0) > (+ex.mtime||0)) byId[t.id]=t;
+      });
       S.txns = Object.values(byId).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
       S.deleted = [...del];
       if(remoteEdit > lastEdit){
@@ -1482,6 +1488,7 @@ async function add(){
     if(!t.cpName){ document.getElementById('cpOpening').focus(); return; }
   }
 
+  t.mtime=Date.now(); // version stamp so edits win over stale copies on sync
   if(S.editId){
     const idx=S.txns.findIndex(tx=>tx.id===S.editId);
     t.id=S.editId;
