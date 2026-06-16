@@ -409,7 +409,7 @@ const DEFAULT_BUDGETS = {"Rent":13037,"Household":3740,"Groceries":3000,"Eating 
 const fmt = n => "₹" + Math.round(n).toLocaleString('en-IN');
 const monthKey = d => d.slice(0,7);
 const nowMonth = () => new Date().toISOString().slice(0,7);
-const BUILD = '2026-06-16.1'; // bump on each deploy; shown in footer to spot stale caches
+const BUILD = '2026-06-16.2'; // bump on each deploy; shown in footer to spot stale caches
 
 let S = {txns:[], budgets:{}, settings:{startingCash:72612}, deleted:[], type:"expense", month:nowMonth(), editId:null};
 
@@ -556,9 +556,14 @@ function srcOf(t){ return t.src || (t.card ? 'card' : 'bank'); } // back-compat 
 /* ---- card management ---- */
 function getCards(){ return S.settings.cards||[]; }
 function cardMeta(c){ return (S.settings.cardMeta||{})[c]||{}; }
-function cardOpening(c){ const m=cardMeta(c); return (m&&+m.opening)||0; }
+// A card's starting outstanding has two parts captured at setup:
+//  billed   = statement already generated, now due (legacy single 'opening' is treated as billed)
+//  unbilled = spending since the last statement, not yet billed
+function cardBilled(c){ const m=cardMeta(c); return (+m.billed||0)+(+m.opening||0); }
+function cardUnbilled(c){ return +cardMeta(c).unbilled||0; }
+function cardOpening(c){ return cardBilled(c)+cardUnbilled(c); }
 function totalCardOpening(){ return getCards().reduce((s,c)=>s+cardOpening(c),0); }
-// Current outstanding on a card = onboarding opening + everything charged since, minus payments
+// Current total owed on a card = starting outstanding + everything charged since, minus payments
 function cardBalance(c){ return cardOpening(c) + S.txns.reduce((s,t)=>s+cardDeltaFor(t,c),0); }
 const ORD=n=>{n=+n;const s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);};
 // next occurrence of a day-of-month from today, as a short label
@@ -630,10 +635,12 @@ async function addCard(){
   if(cards.includes(v)){ alert('Card already added.'); return; }
   S.settings.cards=[...cards, v];
   // optional: capture current bill + billing cycle so the card tile is accurate from day one
-  const ob=prompt(`Current outstanding on ${v} (charged but not yet paid). Leave blank / 0 if none:`, '0');
-  if(ob!==null){
+  const bv=prompt(`Generated bill on ${v} that's due (statement already raised, unpaid). Leave blank / 0 if none:`, '0');
+  if(bv!==null){
     const meta={};
-    const opening=parseFloat(ob); if(!isNaN(opening)&&opening>0) meta.opening=Math.round(opening*100)/100;
+    const billed=parseFloat(bv); if(!isNaN(billed)&&billed>0) meta.billed=Math.round(billed*100)/100;
+    const uv=prompt(`Unbilled spends on ${v} since the last statement (not yet billed). Leave blank / 0 if none:`, '0');
+    const unbilled=parseFloat(uv); if(!isNaN(unbilled)&&unbilled>0) meta.unbilled=Math.round(unbilled*100)/100;
     const bd=prompt('Statement / billing day of month (1-31). Optional — leave blank to skip:','');
     const bdn=parseInt(bd); if(!isNaN(bdn)&&bdn>=1&&bdn<=31) meta.billDay=bdn;
     const dd=prompt('Payment due day of month (1-31). Optional — leave blank to skip:','');
@@ -646,9 +653,14 @@ async function addCard(){
 }
 async function editCard(name){
   const m={...cardMeta(name)};
-  const ob=prompt(`Current outstanding on ${name} (₹):`, m.opening||0);
-  if(ob===null) return;
-  const opening=parseFloat(ob); if(!isNaN(opening)) m.opening=Math.round(opening*100)/100; else delete m.opening;
+  // migrate legacy single 'opening' into the billed bucket
+  if(m.opening!=null && m.billed==null){ m.billed=m.opening; }
+  delete m.opening;
+  const bv=prompt(`Generated bill due on ${name} (statement raised, unpaid) ₹:`, m.billed||0);
+  if(bv===null) return;
+  const billed=parseFloat(bv); if(!isNaN(billed)&&billed>0) m.billed=Math.round(billed*100)/100; else delete m.billed;
+  const uv=prompt(`Unbilled spends on ${name} since last statement ₹:`, m.unbilled||0);
+  const unbilled=parseFloat(uv); if(!isNaN(unbilled)&&unbilled>0) m.unbilled=Math.round(unbilled*100)/100; else delete m.unbilled;
   const bd=prompt('Statement / billing day of month (1-31, blank to clear):', m.billDay||'');
   const bdn=parseInt(bd); if(!isNaN(bdn)&&bdn>=1&&bdn<=31) m.billDay=bdn; else delete m.billDay;
   const dd=prompt('Payment due day of month (1-31, blank to clear):', m.dueDay||'');
@@ -667,9 +679,13 @@ async function removeCard(name){
   fillCardSelects(); renderCardsSection();
 }
 async function payCardBill(cardId){
-  const owed=(cardId?cardOpening(cardId):0)+S.txns.reduce((s,t)=>s+cardDeltaFor(t,cardId),0);
+  const total=(cardId?cardOpening(cardId):0)+S.txns.reduce((s,t)=>s+cardDeltaFor(t,cardId),0);
+  const billed=cardId?cardBilled(cardId):0;        // statement due now
+  const unbilled=Math.max(0, total-billed);        // not yet billed
+  const def=billed>0.5?billed:total;               // default to paying the statement
   const label=cardId||'card';
-  const v=prompt(`Pay bill for ${label} from bank (₹):`, Math.max(0,Math.round(owed)));
+  const info=cardId?`\nStatement due ~${fmt(billed)} · unbilled ~${fmt(unbilled)} · total ~${fmt(Math.max(0,total))}`:'';
+  const v=prompt(`Pay bill for ${label} from bank (₹):${info}`, Math.max(0,Math.round(def)));
   if(v===null) return;
   const amt=parseFloat(v); if(isNaN(amt)||amt<=0) return;
   S.txns.push({id:Date.now(), type:'cardpay', cardId, amount:amt,
@@ -686,15 +702,15 @@ function renderCardsSection(){
     content.innerHTML='<div class="empty">No cards added yet — click "+ Add card" to track card balances.</div>';
     return;
   }
-  // tally untagged card transactions (old data without cardId)
-  const untagged=S.txns.reduce((s,t)=>s+cardDeltaFor(t,null),0);
   let html=cards.map(c=>{
     const bal=cardBalance(c);
     const cls=bal>0.5?'amb':(bal<-0.5?'pos':'');
     const m=cardMeta(c);
+    const billed=cardBilled(c), unbilled=Math.max(0, bal-billed);
     const bits=[];
+    if(billed>0.5) bits.push(`${fmt(billed)} due${m.dueDay?' '+nextDueLabel(m.dueDay):''}`);
+    if(unbilled>0.5) bits.push(`${fmt(unbilled)} unbilled`);
     if(m.billDay) bits.push('bills '+ORD(m.billDay));
-    if(m.dueDay) bits.push('due '+nextDueLabel(m.dueDay));
     const hint=bits.length?`<span style="display:block;font-family:'Hanken Grotesk';font-weight:400;font-size:11px;color:var(--faint);letter-spacing:0;margin-top:2px">${bits.join(' · ')}</span>`:'';
     return `<div class="card-row">
       <span class="card-name">${c}${hint}</span>
@@ -704,9 +720,6 @@ function renderCardsSection(){
       <button class="card-del" onclick="removeCard('${c}')" title="Remove card">×</button>
     </div>`;
   }).join('');
-  if(Math.abs(untagged)>0.5){
-    html+=`<div class="card-row"><span class="card-name" style="color:var(--faint)">Untagged (old entries)</span><span class="card-bal ${untagged>0?'amb':''}">${untagged<0?'-':''}₹${fmt(Math.abs(untagged))}</span><button class="card-pay-btn" onclick="payCardBill(null)">Pay bill</button></div>`;
-  }
   content.innerHTML=html;
 }
 function cashDelta(t){
@@ -1716,7 +1729,7 @@ function buildWizard(){
 
   // Step 4 — cards
   const s4=`<div class="onb-step">
-    <p style="font-size:13px;color:var(--muted);line-height:1.55;margin:0 0 12px">Add each credit card with its <b>current unpaid bill</b> and billing cycle. Different due dates are fine — each card tracks its own.</p>
+    <p style="font-size:13px;color:var(--muted);line-height:1.55;margin:0 0 12px">Add each card with what you owe, split into <b>bill due</b> (statement already generated) and <b>unbilled</b> (spent since the last statement). Either can be 0. Different billing/due dates are fine — each card tracks its own.</p>
     <div id="w-cards"></div>
     <button type="button" class="btn" onclick="wAddCard()" style="margin-top:6px">+ Add a card</button>
   </div>`;
@@ -1751,9 +1764,12 @@ function wAddCard(p){
       <button type="button" onclick="this.closest('.w-card-row').remove()" style="background:none;border:none;color:var(--faint);font-size:18px;cursor:pointer;padding:0 4px">×</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <div style="flex:1;min-width:130px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Current unpaid bill (₹)</label><input class="wc-open" type="number" inputmode="decimal" placeholder="0" value="${p.opening!=null?p.opening:''}" style="${onbNumStyle}"></div>
-      <div style="width:96px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Bills on (day)</label><input class="wc-bill" type="number" inputmode="numeric" placeholder="18" value="${p.billDay!=null?p.billDay:''}" style="${onbNumStyle}"></div>
-      <div style="width:96px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Due on (day)</label><input class="wc-due" type="number" inputmode="numeric" placeholder="5" value="${p.dueDay!=null?p.dueDay:''}" style="${onbNumStyle}"></div>
+      <div style="flex:1;min-width:140px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Bill due (statement, ₹)</label><input class="wc-billed" type="number" inputmode="decimal" placeholder="0" value="${p.billed!=null?p.billed:(p.opening!=null?p.opening:'')}" style="${onbNumStyle}"></div>
+      <div style="flex:1;min-width:140px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Unbilled (since statement, ₹)</label><input class="wc-unbilled" type="number" inputmode="decimal" placeholder="0" value="${p.unbilled!=null?p.unbilled:''}" style="${onbNumStyle}"></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <div style="width:110px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Bills on (day)</label><input class="wc-bill" type="number" inputmode="numeric" placeholder="18" value="${p.billDay!=null?p.billDay:''}" style="${onbNumStyle}"></div>
+      <div style="width:110px"><label style="font-size:10.5px;color:var(--faint);display:block;margin-bottom:3px">Due on (day)</label><input class="wc-due" type="number" inputmode="numeric" placeholder="5" value="${p.dueDay!=null?p.dueDay:''}" style="${onbNumStyle}"></div>
     </div>`;
   wrap.appendChild(div);
 }
@@ -1882,7 +1898,8 @@ async function finishWizard(){
     if(!/^[A-Z0-9]+-[0-9]{4}$/.test(name)) return; // skip malformed silently
     if(!cards.includes(name)) cards.push(name);
     const meta={};
-    const op=parseFloat(row.querySelector('.wc-open').value); if(!isNaN(op)&&op>0) meta.opening=Math.round(op*100)/100;
+    const bl=parseFloat(row.querySelector('.wc-billed').value); if(!isNaN(bl)&&bl>0) meta.billed=Math.round(bl*100)/100;
+    const ub=parseFloat(row.querySelector('.wc-unbilled').value); if(!isNaN(ub)&&ub>0) meta.unbilled=Math.round(ub*100)/100;
     const bd=parseInt(row.querySelector('.wc-bill').value); if(!isNaN(bd)&&bd>=1&&bd<=31) meta.billDay=bd;
     const dd=parseInt(row.querySelector('.wc-due').value); if(!isNaN(dd)&&dd>=1&&dd<=31) meta.dueDay=dd;
     cm[name]=meta;
