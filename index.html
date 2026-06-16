@@ -465,7 +465,12 @@ async function doSync(manual){
       [...S.txns, ...remote.txns].forEach(t=>{
         if(!t || del.has(t.id)) return;
         const ex = byId[t.id];
-        if(!ex || (+t.mtime||0) > (+ex.mtime||0)) byId[t.id]=t;
+        if(!ex){ byId[t.id]=t; return; }
+        const a=+t.mtime||0, b=+ex.mtime||0;
+        if(a>b){ byId[t.id]=t; return; }
+        // mtime tie (e.g. edits made before versioning existed): a category is
+        // only ever added, never cleared, so the categorized copy is the right one.
+        if(a===b && !ex.category && t.category) byId[t.id]=t;
       });
       S.txns = Object.values(byId).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id);
       S.deleted = [...del];
