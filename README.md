@@ -1,97 +1,72 @@
 # Ledger Tracker — project setup
 
 A single-file personal finance tracker (`index.html`). No build step, no dependencies.
-Data is saved in the browser's `localStorage`, tied to the site's URL.
+Data is saved in the browser's `localStorage` and synced across devices via a
+Cloudflare Pages Function backed by Cloudflare KV.
 
 ---
 
-## 1. Create the project locally
+## 1. Project layout
 
-Run this in Terminal (assumes the app downloaded to `~/Downloads/index.html`):
-
-```bash
-# create the folder
-mkdir -p ~/Projects/ledger-tracker
-cd ~/Projects/ledger-tracker
-
-# move the downloaded app in (adjust the name if it saved as ledger-tracker.html)
-mv ~/Downloads/index.html ./index.html
-
-# Netlify: serve the single file from the repo root
-cat > netlify.toml <<'EOF'
-[build]
-  publish = "."
-EOF
-
-# ignore macOS cruft
-cat > .gitignore <<'EOF'
-.DS_Store
-EOF
-
-# first commit
-git init -b main
-git add .
-git commit -m "Initial commit: ledger tracker (single-file HTML)"
+```
+index.html            the whole app
+functions/api/sync.js  Cloudflare Pages Function — /api/sync (GET pull / PUT push)
 ```
 
-## 2. Push to GitHub
+The sync key is `SHA-256(your sync code)`, so the server never sees the plain code.
 
-If you have the GitHub CLI:
+## 2. Deploy on Cloudflare Pages
 
-```bash
-gh repo create ledger-tracker --public --source=. --remote=origin --push
-```
-
-Otherwise create an empty repo at https://github.com/new (name it `ledger-tracker`), then:
-
-```bash
-git remote add origin https://github.com/<your-username>/ledger-tracker.git
-git push -u origin main
-```
-
-## 3. Connect Netlify — to your EXISTING site (this is the part that protects your data)
-
-Your saved expenses are tied to the site's URL. To keep them, attach the repo to the
-site your phone already uses instead of making a new one.
-
-- Open your **existing** Netlify site.
-- Go to **Project configuration > Build & deploy > Continuous deployment > Repository**.
-- Select **Link repository** and choose `ledger-tracker`.
-- Build command: leave empty. Publish directory: `.` (or leave default).
-
-DO NOT use "Add new project / Import an existing project" — that creates a new site at a
-new URL and your existing data will not follow it. Also avoid testing on deploy-preview or
-branch URLs (e.g. `deploy-preview-1--yoursite.netlify.app`); those are different origins.
-Always use your main site URL.
-
-## 4. Protect the data during the switch
-
-1. On your **current live app**, tap **Copy backup** and paste the text into a note/email.
-   Also tap **Export CSV** as a second copy.
-2. After Netlify redeploys, open the app at the **same URL** and hard-refresh
-   (Cmd/Ctrl + Shift + R). Your transactions should already be there.
-3. If they're missing (or you ended up on a new URL), tap **Restore**, paste the backup,
-   confirm.
-
-## 5. Shipping future changes
-
-When you get an updated `index.html`:
+The app is hosted on **Cloudflare Pages**, connected to this Git repo, so a `git push`
+to `main` triggers an automatic redeploy to the same URL.
 
 ```bash
 cd ~/Projects/ledger-tracker
-cp ~/Downloads/index.html ./index.html   # overwrite with the new version
+cp ~/Downloads/index.html ./index.html   # if you got an updated build
 git add -A
 git commit -m "Update tracker"
 git push
 ```
 
-Netlify auto-redeploys to the same URL, so your saved data stays intact.
+Pages config: build command empty, output directory `.` (the repo root). Always use your
+main site URL — preview/branch URLs are different origins and won't see your data.
+
+### KV binding (one-time)
+
+The sync function needs a KV namespace bound as `LEDGER_SYNC`:
+Cloudflare Dashboard → Pages project → Settings → Functions → KV namespace bindings →
+add binding `LEDGER_SYNC` → your KV namespace.
+
+## 3. Sync across devices
+
+Tap **Sync**, enter the **same secret code** on every device. Matching codes share data;
+different codes stay separate. Data pulls on load and when you refocus the tab, and pushes
+a couple of seconds after any change.
+
+## 4. Updating the app — beat the cache
+
+It's a single HTML file, so browsers (especially mobile Safari) can hold an **old cached
+copy** after a deploy. The footer shows a `build` date — if two devices show different
+build values, the older one is stale. To force the latest:
+
+- **Desktop:** hard refresh — Cmd/Ctrl + Shift + R.
+- **Mobile Safari:** pull-to-refresh usually isn't enough. Close the tab and reopen, or
+  Settings → Safari → Advanced → Website Data → remove the site, then reopen.
+
+A device running old code can keep pushing stale data back, so make sure **both** devices
+show the same build before trusting a sync.
+
+## 5. Protect the data
+
+1. Tap **Copy backup** weekly and paste it somewhere safe (it's a full snapshot —
+   transactions, budgets, cards, groups, starting cash). **Export CSV** is a second copy.
+2. After a redeploy, open at the **same URL** and hard-refresh. Your data should be there.
+3. If it's missing, tap **Restore**, paste the backup, confirm.
 
 ---
 
 ## Note on persistence
 
-This data lives on the device's browser, not in the cloud. Mobile Safari can evict a
-site's storage after ~7 days of no use, and "Clear website data" wipes it. Keep a weekly
-**Copy backup**. Backups are full snapshots (transactions, budgets, starting cash), so any
-future move is lossless via Copy backup -> Restore.
+Local data lives in the device's browser. Cloudflare KV keeps the synced copy. Mobile
+Safari can evict a site's storage after long inactivity, and "Clear website data" wipes the
+local copy — so keep a weekly **Copy backup**. Backups are lossless via Copy backup → Restore.

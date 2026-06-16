@@ -146,7 +146,7 @@
       <button class="btn" id="restore">Restore</button>
     </div>
   </header>
-  <div class="sub">Stopgap tracker — saves automatically. Export regularly; this is your bridge until the app is built.</div>
+  <div class="sub">Stopgap tracker — saves automatically. Export regularly; this is your bridge until the app is built. <span id="buildTag" style="color:var(--faint)"></span></div>
   <div id="importPanel" class="hidden" style="margin:10px 0;padding:12px;border:1px solid var(--amber-soft);border-radius:12px;background:var(--panel)">
     <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Paste a backup and restore it. <b style="color:var(--amber)">This replaces everything currently in this app.</b></div>
     <textarea id="importText" placeholder="Paste your backup JSON here" style="width:100%;box-sizing:border-box;min-height:90px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:12px"></textarea>
@@ -409,6 +409,7 @@ const DEFAULT_BUDGETS = {"Rent":13037,"Household":3740,"Groceries":3000,"Eating 
 const fmt = n => "₹" + Math.round(n).toLocaleString('en-IN');
 const monthKey = d => d.slice(0,7);
 const nowMonth = () => new Date().toISOString().slice(0,7);
+const BUILD = '2026-06-16.1'; // bump on each deploy; shown in footer to spot stale caches
 
 let S = {txns:[], budgets:{}, settings:{startingCash:72612}, deleted:[], type:"expense", month:nowMonth(), editId:null};
 
@@ -987,13 +988,25 @@ function renderGroup(){
   const g2=getActiveGroup();
   const uncatGroup=g2 ? S.txns.filter(t=>t.type==='group'&&!t.category&&((t.groupId&&t.groupId===g2.id)||(getGroups()[0]===g2&&!t.groupId))) : [];
   if(uncatGroup.length){
+    const catOpts=catList().map(c=>`<option value="${c}">${c}</option>`).join('');
     html+=`<div style="margin-top:12px;padding:10px 12px;background:var(--panel-2);border:1px solid var(--amber-soft);border-radius:10px;font-size:12.5px;color:var(--muted)">
       <b style="color:var(--amber)">⚠ ${uncatGroup.length} group entr${uncatGroup.length>1?'ies':'y'} ha${uncatGroup.length>1?'ve':'s'} no category.</b>
-      Click ✎ in the transaction list to edit ${uncatGroup.length>1?'them':'it'} and assign a category so ${uncatGroup.length>1?'they':'it'} count${uncatGroup.length===1?'s':''} correctly in your budget.
-      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${uncatGroup.map(t=>`<span style="background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px" onclick="editTx(${t.id})">${t.date} · ${t.desc||fmt(t.amount)}</span>`).join('')}</div>
+      Pick a category for each below so ${uncatGroup.length>1?'they':'it'} count${uncatGroup.length===1?'s':''} correctly in your budget.
+      <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">${uncatGroup.map(t=>`<div style="display:flex;align-items:center;gap:8px">
+        <span style="flex:1;font-size:11.5px;font-family:'JetBrains Mono',monospace;color:var(--text)">${t.date} · ${t.desc||fmt(t.amount)}</span>
+        <select onchange="setGroupCategory(${t.id}, this.value)" style="background:var(--panel);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 8px;font-size:12px;font-family:inherit"><option value="">Pick category…</option>${catOpts}</select>
+      </div>`).join('')}</div>
     </div>`;
   }
   content.innerHTML=html;
+}
+async function setGroupCategory(id, cat){
+  if(!cat) return;
+  const t=S.txns.find(x=>x.id===id); if(!t) return;
+  t.category=cat; t.mtime=Date.now(); // version stamp so it wins on sync
+  await setJSON('ledger:txns', S.txns);
+  await markEdit(); scheduleSync();
+  fillCatSelect(); render(); renderGroup();
 }
 function populateGroupSelects(g){
   // g = which group to show members for (defaults to active)
@@ -1911,6 +1924,7 @@ async function finishWizard(){
 }
 
 async function init(){
+  const bt=document.getElementById('buildTag'); if(bt) bt.textContent='· build '+BUILD;
   document.getElementById('date').value = new Date().toISOString().slice(0,10);
   document.getElementById('dateHint').textContent = '';
   await load();
