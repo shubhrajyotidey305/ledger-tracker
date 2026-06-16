@@ -178,10 +178,10 @@
 
   <div class="stats">
     <div class="stat" id="cashCard" style="cursor:pointer"><div class="k">Cash on hand</div><div class="v num" id="sCash">&mdash;</div></div>
-    <div class="stat"><div class="k">Spent this month</div><div class="v num amb" id="sSpent">&mdash;</div><small id="sSpentSub"></small></div>
+    <div class="stat"><div class="k">Spent this month</div><div class="v num amb" id="sSpent">&mdash;</div><small id="sSpentBreak" style="display:block;line-height:1.5"></small><small id="sSpentSub"></small></div>
     <div class="stat" id="budCard" style="cursor:pointer"><div class="k">Budget left</div><div class="v num" id="sLeft">&mdash;</div></div>
     <div class="stat"><div class="k">Net with people</div><div class="v num" id="sPeople">&mdash;</div><small>+ owed to you</small></div>
-    <div class="stat" id="cardTile" style="cursor:pointer"><div class="k">Card balance</div><div class="v num" id="sCard">&mdash;</div><small>charged, not yet paid</small></div>
+    <div class="stat" id="cardTile" style="cursor:pointer"><div class="k">Card balance</div><div class="v num" id="sCard">&mdash;</div><small id="sCardSub" style="display:block;line-height:1.5">charged, not yet paid</small></div>
     <div class="stat"><div class="k">Amazon Pay</div><div class="v num" id="sWallet">&mdash;</div><small>wallet balance</small></div>
   </div>
 
@@ -409,7 +409,7 @@ const DEFAULT_BUDGETS = {"Rent":13037,"Household":3740,"Groceries":3000,"Eating 
 const fmt = n => "₹" + Math.round(n).toLocaleString('en-IN');
 const monthKey = d => d.slice(0,7);
 const nowMonth = () => new Date().toISOString().slice(0,7);
-const BUILD = '2026-06-16.2'; // bump on each deploy; shown in footer to spot stale caches
+const BUILD = '2026-06-16.3'; // bump on each deploy; shown in footer to spot stale caches
 
 let S = {txns:[], budgets:{}, settings:{startingCash:72612}, deleted:[], type:"expense", month:nowMonth(), editId:null};
 
@@ -1195,14 +1195,34 @@ function render(){
   const cardOwed = totalCardOpening() + S.txns.reduce((s,t)=>s+cardDelta(t),0);
   const walletBal = S.txns.reduce((s,t)=>s+walletDelta(t),0);
 
+  // "Spent this month" split by where it was paid from
+  let spBank=0, spCard=0, spWallet=0, spOwed=0;
+  S.txns.forEach(t=>{
+    if(t.type!=='expense' && t.type!=='group') return;
+    const sl=budgetSliceForMonth(t,S.month); if(!sl) return;
+    const paidByYou = t.type==='group' ? t.payer==='you' : t.paidBy!=='other';
+    if(!paidByYou){ spOwed+=sl; return; }
+    const s=srcOf(t);
+    if(s==='card') spCard+=sl; else if(s==='wallet') spWallet+=sl; else spBank+=sl;
+  });
+  // Card balance split: old liability carried in at setup vs this month's new card spending
+  const cardOld = totalCardOpening();
+  let cardThisMonth=0;
+  S.txns.forEach(t=>{ if(monthKey(t.date)===S.month && (t.type==='expense'||t.type==='group')) cardThisMonth += cardDelta(t); });
+
   document.getElementById('sCash').textContent = fmt(cash);
   document.getElementById('sCash').className = 'v num ' + (cash>=0?'':'neg');
   document.getElementById('sSpent').textContent = fmt(spent);
+  const spParts = ['Bank '+fmt(spBank), 'Card '+fmt(spCard), 'Wallet '+fmt(spWallet)];
+  if(spOwed>0.5) spParts.push('Split '+fmt(spOwed));
+  document.getElementById('sSpentBreak').textContent = spParts.join(' · ');
   document.getElementById('sSpentSub').textContent = 'of ' + fmt(totalBudget) + ' planned';
   const left = totalBudget - spent;
   const le = document.getElementById('sLeft'); le.textContent = fmt(left); le.className='v num '+(left>=0?'pos':'neg');
   const pe = document.getElementById('sPeople'); pe.textContent = (netPeople>=0?'':'-')+fmt(Math.abs(netPeople)); pe.className='v num '+(netPeople>=0?'pos':'neg');
   const ce = document.getElementById('sCard'); ce.textContent = fmt(cardOwed); ce.className='v num '+(cardOwed>0.5?'amb':'');
+  const cs=document.getElementById('sCardSub');
+  if(cs){ cs.textContent = (cardOld>0.5||cardThisMonth>0.5) ? (fmt(cardOld)+' old liability · '+fmt(cardThisMonth)+' this month') : 'charged, not yet paid'; }
   const we = document.getElementById('sWallet'); we.textContent = fmt(walletBal); we.className='v num '+(walletBal>0.5?'pos':'');
 
   // budgets
