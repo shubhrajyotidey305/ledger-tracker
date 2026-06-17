@@ -182,7 +182,7 @@
     <div class="stat" id="budCard" style="cursor:pointer"><div class="k">Budget left</div><div class="v num" id="sLeft">&mdash;</div></div>
     <div class="stat"><div class="k">Net with people</div><div class="v num" id="sPeople">&mdash;</div><small>+ owed to you</small></div>
     <div class="stat" id="cardTile" style="cursor:pointer"><div class="k">Card balance</div><div class="v num" id="sCard">&mdash;</div><small id="sCardSub" style="display:block;line-height:1.5">charged, not yet paid</small></div>
-    <div class="stat"><div class="k">Amazon Pay</div><div class="v num" id="sWallet">&mdash;</div><small>wallet balance</small></div>
+    <div class="stat"><div class="k">Amazon Pay</div><div class="v num" id="sWallet">&mdash;</div><small id="sWalletSub" style="display:block;line-height:1.5">wallet balance</small></div>
   </div>
 
   <!-- CARDS SECTION -->
@@ -242,12 +242,14 @@
         <div class="f"><label>Cashback goes to</label><select id="cashbackDest" onchange="onCashbackDestChange()">
           <option value="wallet">Amazon Pay wallet</option>
         </select></div>
+        <div class="f"><label>Credits on <span style="color:var(--faint);font-weight:400">— blank = now</span></label><input id="cashbackDate" type="date"></div>
       </div>
       <div class="row hidden" id="cbCreditRow">
         <div class="f"><label>Credit to</label><select id="cbCreditTo" onchange="onCbCreditChange()">
           <option value="wallet">Amazon Pay wallet</option>
         </select></div>
         <div class="f hidden" id="cbCardSelRow"><label>Card</label><select id="cbCardSel"></select></div>
+        <div class="f"><label>Credits on <span style="color:var(--faint);font-weight:400">— blank = now</span></label><input id="cbCreditDate" type="date"></div>
       </div>
       <div class="row">
         <div class="f"><label>Description</label><input id="desc" placeholder="e.g. lunch at office"></div>
@@ -324,6 +326,7 @@
           <div class="f"><label>Cashback goes to</label><select id="groupCashbackDest">
             <option value="wallet">Amazon Pay wallet</option>
           </select></div>
+          <div class="f"><label>Credits on <span style="color:var(--faint);font-weight:400">— blank = now</span></label><input id="groupCashbackDate" type="date"></div>
         </div>
         <label class="toggle" style="margin:4px 0 6px"><input type="checkbox" id="groupHousehold"> Household expense</label>
         <div style="font-size:11.5px;color:var(--faint);margin:-2px 0 8px">Your share counts toward your monthly budget.</div>
@@ -576,15 +579,15 @@ function nextDueLabel(day){
 }
 function cardDeltaFor(t, cardId){
   if(t.type==='cardpay') return (t.cardId||null)===cardId ? -t.amount : 0;
-  if(t.type==='cashback' && t.cardId) return t.cardId===cardId ? -t.amount : 0;
+  if(t.type==='cashback' && t.cardId) return (t.cardId===cardId && cbReady(t)) ? -t.amount : 0;
   if(t.type==='expense' && t.paidBy!=='other' && srcOf(t)==='card'){
     if((t.cardId||null)!==cardId) return 0;
-    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet'&&t.cashbackTo===cardId)?t.cashback:0;
+    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet'&&t.cashbackTo===cardId&&cbReady(t))?t.cashback:0;
     return t.amount - cb;
   }
   if(t.type==='group' && t.payer==='you' && srcOf(t)==='card'){
     if((t.cardId||null)!==cardId) return 0;
-    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet'&&t.cashbackTo===cardId)?t.cashback:0;
+    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet'&&t.cashbackTo===cardId&&cbReady(t))?t.cashback:0;
     return t.amount - cb;
   }
   return 0;
@@ -736,35 +739,52 @@ function cashDelta(t){
   if(t.type==='group-settle') return t.from==='you' ? -t.amount : 0;
   return 0;
 }
+// Scheduled cashback: a cashback with a future cbDate is "pending" and doesn't
+// affect balances until that date passes — then it auto-realizes (live check, no job needed).
+const todayStr = () => new Date().toISOString().slice(0,10);
+function cbReady(t){ return !t.cbDate || t.cbDate <= todayStr(); }
 function cardDelta(t){ // + = owe more on card
   if(t.type==='cardpay') return -t.amount;
-  if(t.type==='cashback' && t.cardId) return -t.amount; // cashback credited to card
+  if(t.type==='cashback' && t.cardId) return cbReady(t) ? -t.amount : 0; // cashback credited to card
   if(t.type==='expense' && t.paidBy!=='other' && srcOf(t)==='card'){
-    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet')?t.cashback:0;
+    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet'&&cbReady(t))?t.cashback:0;
     return t.amount - cb;
   }
   if(t.type==='group' && t.payer==='you' && srcOf(t)==='card'){
-    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet')?t.cashback:0;
+    const cb=(t.cashback&&t.cashbackTo&&t.cashbackTo!=='wallet'&&cbReady(t))?t.cashback:0;
     return t.amount - cb;
   }
   return 0;
 }
 function walletDelta(t){ // + = wallet balance up
-  if(t.type==='cashback') return t.cardId ? 0 : t.amount; // card cashback doesn't go to wallet
+  if(t.type==='cashback') return (t.cardId || !cbReady(t)) ? 0 : t.amount; // card or pending cashback isn't in wallet
   if(t.type==='expense'){
     let d=0;
-    // cashback only goes to wallet if destination is wallet (default)
-    if(t.cashback && t.paidBy!=='other' && (!t.cashbackTo||t.cashbackTo==='wallet')) d += t.cashback;
+    // cashback only goes to wallet if destination is wallet (default), and once realized
+    if(t.cashback && t.paidBy!=='other' && (!t.cashbackTo||t.cashbackTo==='wallet') && cbReady(t)) d += t.cashback;
     if(t.paidBy!=='other' && srcOf(t)==='wallet') d -= t.amount;
     return d;
   }
   if(t.type==='group' && t.payer==='you'){
     let d=0;
-    if(t.cashback && (!t.cashbackTo||t.cashbackTo==='wallet')) d += t.cashback;
+    if(t.cashback && (!t.cashbackTo||t.cashbackTo==='wallet') && cbReady(t)) d += t.cashback;
     if(srcOf(t)==='wallet') d -= t.amount;
     return d;
   }
   return 0;
+}
+// Pending (not-yet-credited) cashback portion of a txn, split by destination.
+function pendingCashback(t){
+  if(cbReady(t)) return {wallet:0, card:0, cardId:null};
+  if(t.type==='cashback'){
+    return t.cardId ? {wallet:0, card:t.amount, cardId:t.cardId} : {wallet:t.amount, card:0, cardId:null};
+  }
+  const cb=t.cashback||0; if(!cb) return {wallet:0, card:0, cardId:null};
+  const toWallet=(!t.cashbackTo||t.cashbackTo==='wallet');
+  if((t.type==='expense'&&t.paidBy!=='other')||(t.type==='group'&&t.payer==='you')){
+    return toWallet ? {wallet:cb, card:0, cardId:null} : {wallet:0, card:cb, cardId:t.cashbackTo};
+  }
+  return {wallet:0, card:0, cardId:null};
 }
 const budgetSpend = t => (t.type==='expense' ? t.yourShare : 0);
 function monthsBetween(fromYM, toYM){
@@ -1194,6 +1214,15 @@ function render(){
   const netPeople = S.txns.reduce((s,t)=>s+personDelta(t),0);
   const cardOwed = totalCardOpening() + S.txns.reduce((s,t)=>s+cardDelta(t),0);
   const walletBal = S.txns.reduce((s,t)=>s+walletDelta(t),0);
+  // pending (scheduled) cashback totals
+  let pendWallet=0, pendCard=0, nextCb=null;
+  S.txns.forEach(t=>{
+    const p=pendingCashback(t);
+    if(p.wallet||p.card){
+      pendWallet+=p.wallet; pendCard+=p.card;
+      if(t.cbDate && (!nextCb || t.cbDate<nextCb)) nextCb=t.cbDate;
+    }
+  });
 
   // "Spent this month" split by where it was paid from
   let spBank=0, spCard=0, spWallet=0, spOwed=0;
@@ -1222,8 +1251,14 @@ function render(){
   const pe = document.getElementById('sPeople'); pe.textContent = (netPeople>=0?'':'-')+fmt(Math.abs(netPeople)); pe.className='v num '+(netPeople>=0?'pos':'neg');
   const ce = document.getElementById('sCard'); ce.textContent = fmt(cardOwed); ce.className='v num '+(cardOwed>0.5?'amb':'');
   const cs=document.getElementById('sCardSub');
-  if(cs){ cs.textContent = (cardOld>0.5||cardThisMonth>0.5) ? (fmt(cardOld)+' old liability · '+fmt(cardThisMonth)+' this month') : 'charged, not yet paid'; }
+  if(cs){
+    let base=(cardOld>0.5||cardThisMonth>0.5) ? (fmt(cardOld)+' old liability · '+fmt(cardThisMonth)+' this month') : 'charged, not yet paid';
+    if(pendCard>0.5) base+=' · −'+fmt(pendCard)+' cashback pending';
+    cs.textContent=base;
+  }
   const we = document.getElementById('sWallet'); we.textContent = fmt(walletBal); we.className='v num '+(walletBal>0.5?'pos':'');
+  const wsub=document.getElementById('sWalletSub');
+  if(wsub) wsub.textContent = pendWallet>0.5 ? ('wallet balance · +'+fmt(pendWallet)+' pending') : 'wallet balance';
 
   // budgets
   const spentByCat = {};
@@ -1269,7 +1304,8 @@ function render(){
     const who = (Array.isArray(t.splits)&&t.splits.length)
       ? t.splits.map(s=>s.name+' '+fmt(s.share)).join(', ') + (t.paidBy==='other'?' (you owe)':'')
       : t.cpName;
-    const meta = [t.category||t.type, who?('· '+who):'', t.household?'· household':'', srcTag, spreadTag].filter(Boolean).join(' ');
+    const cbTag = (t.cbDate && !cbReady(t)) ? ('· ⏳ cashback '+t.cbDate) : '';
+    const meta = [t.category||t.type, who?('· '+who):'', t.household?'· household':'', srcTag, spreadTag, cbTag].filter(Boolean).join(' ');
     return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':t.type}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="edt" data-id="${t.id}" title="Edit">✎</button><button class="del" data-id="${t.id}">×</button></div>`;
   }).join('') : '<div class="empty">No entries yet — add your first above.'+(SYNC.code?'':' <span style="cursor:pointer;color:var(--amber);text-decoration:underline" onclick="setupSync()">Set up sync</span> to pull data from another device.')+'</div>';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
@@ -1403,6 +1439,8 @@ function editTx(id){
       if(t.cardId){ const cs=document.getElementById('cardSel'); if(cs) cs.value=t.cardId; }
     }
     document.getElementById('cashbackAmt').value=t.cashback||'';
+    const cdest=document.getElementById('cashbackDest'); if(cdest) cdest.value=t.cashbackTo||'wallet';
+    document.getElementById('cashbackDate').value=t.cbDate||'';
     if(t.spreadDays>1) document.getElementById('spread').value='d'+t.spreadDays;
     else if(t.spread>1) document.getElementById('spread').value='m'+t.spread;
     else document.getElementById('spread').value='m1';
@@ -1423,6 +1461,10 @@ function editTx(id){
         document.getElementById('yourShare').value=t.yourShare||'';
       }
     }
+  } else if(t.type==='cashback'){
+    const cbc=document.getElementById('cbCreditTo'); if(cbc) cbc.value=t.cardId||'wallet';
+    onCbCreditChange();
+    document.getElementById('cbCreditDate').value=t.cbDate||'';
   } else if(t.type==='lend'||t.type==='repay'){
     document.getElementById('cpPerson').value=t.cpName||'';
     if(t.type==='repay') document.getElementById('dir').value=t.dir||'in';
@@ -1434,6 +1476,9 @@ function editTx(id){
     const gps=document.getElementById('groupPaySrc'); if(gps) gps.value=srcOf(t);
     onGroupPaySrcChange();
     if(srcOf(t)==='card'&&t.cardId){ const gc=document.getElementById('groupCardSel'); if(gc) gc.value=t.cardId; }
+    document.getElementById('groupCashbackAmt').value=t.cashback||'';
+    const gcd=document.getElementById('groupCashbackDest'); if(gcd) gcd.value=t.cashbackTo||'wallet';
+    document.getElementById('groupCashbackDate').value=t.cbDate||'';
     document.querySelectorAll('.gs-share').forEach(i=>{
       const s=(t.shares||[]).find(x=>x.name===i.dataset.member);
       i.value=s?s.share:'';
@@ -1467,7 +1512,7 @@ async function add(){
     t.src = document.getElementById('paySrc').value;
     if(t.src==='card'){ const cs=document.getElementById('cardSel'); t.cardId=cs&&cs.value?cs.value:null; }
     t.cashback = parseFloat(document.getElementById('cashbackAmt').value)||0;
-    if(t.cashback){ const cd=document.getElementById('cashbackDest'); t.cashbackTo=cd?cd.value:'wallet'; }
+    if(t.cashback){ const cd=document.getElementById('cashbackDest'); t.cashbackTo=cd?cd.value:'wallet'; const cbd=document.getElementById('cashbackDate').value; if(cbd) t.cbDate=cbd; }
     const sv = document.getElementById('spread').value;
     if(sv[0]==='d') t.spreadDays = parseInt(sv.slice(1))||1; else t.spread = parseInt(sv.slice(1))||1;
     if(document.getElementById('isSplit').checked){
@@ -1502,6 +1547,7 @@ async function add(){
     t.yourShare=0; t.category='Cashback';
     const cbc=document.getElementById('cbCreditTo');
     if(cbc && cbc.value!=='wallet'){ t.cardId=cbc.value; }
+    const cbd=document.getElementById('cbCreditDate').value; if(cbd) t.cbDate=cbd;
   } else if(S.type==='group'){
     t.yourShare=0; t.cp=false;
     t.category=document.getElementById('groupCategory').value||'Group';
@@ -1515,7 +1561,7 @@ async function add(){
     if(t.src==='card'){ const gc=document.getElementById('groupCardSel'); t.cardId=gc&&gc.value?gc.value:null; }
     t.household=document.getElementById('groupHousehold').checked;
     t.cashback=parseFloat(document.getElementById('groupCashbackAmt').value)||0;
-    if(t.cashback){ const gcd=document.getElementById('groupCashbackDest'); t.cashbackTo=gcd?gcd.value:'wallet'; }
+    if(t.cashback){ const gcd=document.getElementById('groupCashbackDest'); t.cashbackTo=gcd?gcd.value:'wallet'; const gcbd=document.getElementById('groupCashbackDate').value; if(gcbd) t.cbDate=gcbd; }
     const shares=[...document.querySelectorAll('.gs-share')].map(i=>({name:i.dataset.member,share:parseFloat(i.value)||0})).filter(s=>s.share>0);
     if(!shares.length){ alert('Enter at least one share.'); return; }
     const tot=shares.reduce((s,x)=>s+x.share,0);
@@ -1565,6 +1611,7 @@ async function add(){
   document.getElementById('groupCashbackAmt').value='';
   const gcbd=document.getElementById('groupCashbackDest'); if(gcbd) gcbd.value='wallet';
   document.getElementById('groupHousehold').checked=false;
+  ['cashbackDate','cbCreditDate','groupCashbackDate'].forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
   document.getElementById('isSplit').checked=false; document.getElementById('household').checked=false;
   document.getElementById('splitFields').classList.add('hidden');
   document.getElementById('splitRows').innerHTML='';
