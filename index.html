@@ -127,6 +127,20 @@
   .card-pay-btn:hover{background:var(--amber);color:#1a1407}
   .card-del{color:var(--faint);cursor:pointer;font-size:15px;padding:0 4px;background:none;border:none}
   .card-del:hover{color:var(--clay)}
+  .gsp{padding:11px 0;border-bottom:1px solid var(--line)}
+  .gsp:last-child{border:none}
+  .gsp.done{opacity:.5}
+  .gsp .gsp-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .gsp .gsp-meta{flex:1;min-width:0}
+  .gsp .gsp-d1{color:var(--text);font-size:13.5px;font-weight:500}
+  .gsp .gsp-d2{color:var(--faint);font-size:11px;margin-top:1px}
+  .gsp .gsp-amt{font-family:'JetBrains Mono',monospace;font-weight:500;font-size:14px;white-space:nowrap}
+  .gsp .gsp-shares{margin-top:6px;font-size:11.5px;color:var(--muted);font-family:'JetBrains Mono',monospace;line-height:1.6}
+  .gsp .gsp-shares .me{color:var(--amber)}
+  .gsp-btn{font-size:11px;border-radius:7px;padding:4px 9px;cursor:pointer;font-family:inherit;white-space:nowrap;border:1px solid var(--line);background:var(--panel-2);color:var(--muted)}
+  .gsp-btn.on{background:var(--green);border-color:var(--green);color:#11240a;font-weight:600}
+  .gsp-edit{font-size:13px;color:var(--faint);background:none;border:none;cursor:pointer;padding:0 4px}
+  .gsp-edit:hover{color:var(--amber)}
   @media(max-width:680px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
 </style>
 
@@ -396,6 +410,15 @@
       </div>
     </div>
     <div id="groupContent"><div class="empty">Create a group above to track shared balances and simplify debts.</div></div>
+  </div>
+
+  <div class="card" id="groupSpendCard" style="margin-top:14px">
+    <h2>Group Spending Log <span class="hint" id="groupSpendHint" style="font-weight:400"></span>
+      <span style="display:flex;gap:8px;align-items:center">
+        <label class="toggle" style="font-size:11.5px;margin:0"><input type="checkbox" id="gsOnlyUnlogged" onchange="renderGroupSpending()"> Only un-logged</label>
+      </span>
+    </h2>
+    <div id="groupSpendContent"><div class="empty">No group expenses yet.</div></div>
   </div>
 
   <div class="card txns" style="margin-top:14px">
@@ -997,6 +1020,7 @@ function renderGroup(){
   if(btn){ btn.textContent=useSimplify?'Simplify: ON':'Simplify: OFF'; btn.style.borderColor=useSimplify?'var(--green)':'var(--line)'; btn.style.color=useSimplify?'var(--green)':'var(--muted)'; }
   if(!g||!g.members||!g.members.length){
     content.innerHTML='<div class="empty">Create a group above to track shared balances and simplify debts.</div>';
+    renderGroupSpending(g);
     return;
   }
   const net=groupNet(g); let html='';
@@ -1039,6 +1063,61 @@ function renderGroup(){
     </div>`;
   }
   content.innerHTML=html;
+  renderGroupSpending(g);
+}
+// Group expenses belonging to group g (first group also owns legacy un-tagged ones)
+function groupExpensesFor(g){
+  if(!g) return [];
+  const isFirst=getGroups()[0]===g;
+  return S.txns.filter(t=>t.type==='group' && ((t.groupId&&t.groupId===g.id)||(isFirst&&!t.groupId)))
+    .sort((a,b)=> b.date.localeCompare(a.date) || b.id-a.id);
+}
+function renderGroupSpending(g){
+  g=g||getActiveGroup();
+  const cont=document.getElementById('groupSpendContent');
+  const hint=document.getElementById('groupSpendHint');
+  if(!cont) return;
+  if(!g||!g.members||!g.members.length){
+    cont.innerHTML='<div class="empty">Create a group to see its spending log.</div>';
+    if(hint) hint.textContent=''; return;
+  }
+  const all=groupExpensesFor(g);
+  const loggedCount=all.filter(t=>t.swLogged).length;
+  if(hint) hint.textContent = all.length ? `${loggedCount}/${all.length} logged on Splitwise` : '';
+  const onlyUn=document.getElementById('gsOnlyUnlogged')?.checked;
+  const list=onlyUn ? all.filter(t=>!t.swLogged) : all;
+  if(!list.length){
+    cont.innerHTML = all.length ? '<div class="empty">All group expenses are logged on Splitwise ✓</div>' : '<div class="empty">No group expenses yet. Add one via the Group entry type.</div>';
+    return;
+  }
+  cont.innerHTML = list.map(t=>{
+    const payerName=dispName(t.payer||'you',g);
+    const shares=(t.shares||[]).map(s=>{
+      const me=s.name==='you';
+      return `<span class="${me?'me':''}">${dispName(s.name,g)} ${fmt(s.share)}</span>`;
+    }).join('  ·  ');
+    const cb = t.cashback ? ` · cashback ${fmt(t.cashback)}` : '';
+    const cardTag = (srcOf(t)==='card') ? ' · '+(t.cardId||'card') : (srcOf(t)==='wallet'?' · wallet':'');
+    return `<div class="gsp${t.swLogged?' done':''}">
+      <div class="gsp-top">
+        <div class="gsp-meta">
+          <div class="gsp-d1">${t.desc||t.category||'Group expense'}</div>
+          <div class="gsp-d2">${t.date} · ${t.category||'Group'} · ${payerName} paid${cardTag}${cb}</div>
+        </div>
+        <div class="gsp-amt">${fmt(t.amount)}</div>
+        <button class="gsp-edit" onclick="editTx(${t.id})" title="Edit">✎</button>
+        <button class="gsp-btn${t.swLogged?' on':''}" onclick="toggleSwLogged(${t.id})">${t.swLogged?'✓ Splitwise':'Mark logged'}</button>
+      </div>
+      <div class="gsp-shares">${shares}</div>
+    </div>`;
+  }).join('');
+}
+async function toggleSwLogged(id){
+  const t=S.txns.find(x=>x.id===id); if(!t) return;
+  t.swLogged=!t.swLogged; t.mtime=Date.now();
+  await setJSON('ledger:txns', S.txns);
+  await markEdit(); scheduleSync();
+  renderGroupSpending();
 }
 async function setGroupCategory(id, cat){
   if(!cat) return;
