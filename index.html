@@ -422,7 +422,7 @@
   </div>
 
   <div class="card txns" style="margin-top:14px">
-    <h2>Recent <span class="hint" id="hhHint"></span></h2>
+    <h2>Recent <span class="hint" id="recentCount" style="font-weight:400"></span> <span class="hint" id="hhHint"></span></h2>
     <div id="txns"><div class="empty">Loading…</div></div>
   </div>
 
@@ -1387,8 +1387,8 @@ function render(){
     return `<div class="p"><div><div class="who">${disp[n]}</div><div class="st">${v>=0?'owes you':'you owe'}</div></div><div style="display:flex;align-items:center;gap:8px"><div class="bal ${v>=0?'pos':'neg'}">${fmt(Math.abs(v))}</div><button onclick="zeroOutPerson('${disp[n]}',${v})" style="font-size:10px;color:var(--faint);background:none;border:1px solid var(--line);border-radius:6px;padding:2px 7px;cursor:pointer;font-family:inherit;white-space:nowrap" title="Add offsetting entry to zero this balance">zero out</button></div></div>`;
   }).join('') : '<div class="empty">No splits or loans yet.</div>';
 
-  // txns
-  const recent = [...S.txns].sort((a,b)=> b.date.localeCompare(a.date) || b.id-a.id).slice(0,40);
+  // txns — show entries dated in the selected month (pick another month in the dropdown to see older)
+  const recent = S.txns.filter(t=>monthKey(t.date)===S.month).sort((a,b)=> b.date.localeCompare(a.date) || b.id-a.id);
   document.getElementById('txns').innerHTML = recent.length ? recent.map(t=>{
     const sign = (t.type==='income'||t.type==='cashback'||(t.type==='repay'&&t.dir==='in')||(t.type==='opening'&&t.dir==='owe')) ? '+' : (t.type==='transfer'||t.type==='opening'||t.type==='group'||t.type==='wallet-load'?'~':'-');
     const cls = sign==='+'?'pos':(sign==='~'?'':'');
@@ -1400,7 +1400,9 @@ function render(){
     const cbTag = (t.cbDate && !cbReady(t)) ? ('· ⏳ cashback '+t.cbDate) : '';
     const meta = [t.category||t.type, who?('· '+who):'', t.household?'· household':'', srcTag, spreadTag, cbTag].filter(Boolean).join(' ');
     return `<div class="tx"><span class="tag">${t.type==='cardpay'?'card pay':(t.type==='wallet-load'?'load':t.type)}</span><div class="desc"><div class="d1">${t.desc||t.category||t.type}</div><div class="d2">${t.date} · ${meta}</div></div><div class="val ${cls}">${sign}${fmt(t.amount)}</div><button class="edt" data-id="${t.id}" title="Edit">✎</button><button class="del" data-id="${t.id}">×</button></div>`;
-  }).join('') : '<div class="empty">No entries yet — add your first above.'+(SYNC.code?'':' <span style="cursor:pointer;color:var(--amber);text-decoration:underline" onclick="setupSync()">Set up sync</span> to pull data from another device.')+'</div>';
+  }).join('') : '<div class="empty">No entries in this month. Pick another month above to see older entries.</div>';
+  const rc=document.getElementById('recentCount');
+  if(rc) rc.textContent = recent.length ? (recent.length+' entr'+(recent.length>1?'ies':'y')+' this month') : '';
   document.querySelectorAll('.del').forEach(b=>b.onclick=()=>delTx(+b.dataset.id));
   document.querySelectorAll('.edt').forEach(b=>b.onclick=()=>editTx(+b.dataset.id));
   renderCardsSection();
